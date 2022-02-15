@@ -16,9 +16,8 @@ CHIP DMux4Way {
     OUT a, b, c, d;
 
     PARTS:
-    Not(in=sel[1],out=lowSwitch);
-    And(a=in,b=sel[1],out=hiVal);
-    And(a=in,b=lowSwitch,out=lowVal);
-    DMux(in=lowVal,sel=sel[0],a=a,b=b);
-    DMux(in=hiVal,sel=sel[0],a=c,b=d);
+    Mux(a=in, b=false, sel=sel[1], out=lowVal);
+    Mux(a=false, b=in, sel=sel[1], out=hiVal);
+    DMux(in=lowVal, sel=sel[0], a=a, b=b);
+    DMux(in=hiVal, sel=sel[0], a=c, b=d);
 }
