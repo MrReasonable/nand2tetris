@@ -16,5 +16,19 @@ CHIP PC {
     OUT out[16];
 
     PARTS:
-    // Put your code here:
+    // 0 0 - Do nothing
+    // 0 1 - Inc
+    // 1 0 - Load
+    // 1 1 - Reset
+    Not(in=load, out=notload);
+    And(a=notload, b=inc, out=doinc);
+    Or(a=reset, b=doinc, out=sellobit);
+    Or(a=reset, b=load, out=selhibit);
+    Or(a=sellobit, b=selhibit, out=mustload);
+    Inc16(in=currval, out=incval);
+
+    Mux4Way16(a=currval, b=incval, c=in, d=false, sel[0]=sellobit, sel[1]=selhibit, out=val);
+    
+    //Load
+    Register(in=val, load=mustload, out=out, out=currval);
 }
