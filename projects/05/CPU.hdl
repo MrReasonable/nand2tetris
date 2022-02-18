@@ -39,5 +39,43 @@ CHIP CPU {
         pc[15];          // address of next instruction
 
     PARTS:
-    // Put your code here:
+    //Aregister
+    Not(in=instruction[15], out=isAInstruction);
+    Or(a=isAInstruction, b=instruction[5], out=loadAReg);
+    Mux16(a[0..14]=instruction[0..14], a[15]=false, b=aluOut, sel=instruction[15], out=aregin);
+    ARegister(in=aregin, load=loadAReg, out=aRegOut, out[0..14]=addressM);
+
+    //Aregister / memory multiplexer
+    Mux16(a=aRegOut, b=inM, sel=instruction[12], out=aregMemOut);
+
+    //Dregister
+    And(a=instruction[15], b=instruction[4], out=ldDReg);
+    DRegister(in=aluOut, load=ldDReg, out=dRegOut);
+
+    //jgt
+    Not(in=aluzr, out=notaluzr);
+    Not(in=alung, out=notalung);
+    And(a=notaluzr, b=notalung, out=alupo);
+    And(a=instruction[15], b=instruction[0], out=jgtcmd);
+    And(a=jgtcmd, b=alupo, out=jgt);
+
+    //jeq
+    And(a=instruction[15], b=instruction[1], out=jeqcmd);
+    And(a=jeqcmd, b=aluzr, out=jeq);
+
+    //jlt
+    And(a=instruction[15], b=instruction[2], out=jltcmd);
+    And(a=jltcmd, b=alung, out=jlt);
+
+   //Set PC loading bit
+    Or8Way(in[0]=jeq, in[1]=jlt, in[3]=jgt, in[4..7]=false, out=loadpc);
+
+    //Program Counter
+    PC(in=aRegOut, load=loadpc, inc=true, reset=reset, out[0..14]=pc);
+
+    //Calculate whether to save to memory
+    And(a=instruction[15], b=instruction[3], out=writeM);
+    
+    //Wire up ALU
+    ALU(x=dRegOut, y=aregMemOut, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], f=instruction[7], no=instruction[6], out=aluOut, out=outM, zr=aluzr, ng=alung);
 }
