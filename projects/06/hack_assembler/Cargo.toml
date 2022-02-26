@@ -1,0 +1,9 @@
+[workspace]
+
+members=[
+    "cli",
+    "symbol_table",
+    "code",
+    "parser",
+    "reader"
+]
