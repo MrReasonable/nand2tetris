@@ -40,15 +40,9 @@ impl From<SymbolTableError> for ParseError {
 
 struct CInstWithSymbols<'a>(&'a CInstruction, &'a SymbolTable);
 
-impl From<&CInstWithSymbols<'_>> for (&CInstruction, &SymbolTable) {
-    fn from(cinst_with_symbols: &CInstWithSymbols<'_>) -> Self {
-        (cinst_with_symbols.0, cinst_with_symbols.1)
-    }
-}
-
-impl From<&CInstWithSymbols<'_>> for u16 {
-    fn from(cinst_with_symbols: &CInstWithSymbols<'_>) -> Self {
-        let (cinstr, symbols) = cinst_with_symbols.into();
+impl From<CInstWithSymbols<'_>> for u16 {
+    fn from(cinst_with_symbols: CInstWithSymbols<'_>) -> Self {
+        let (cinstr, symbols) = (cinst_with_symbols.0, cinst_with_symbols.1);
         let empty_str = &"".to_owned();
         let comp = cinstr.comp();
         let dest = cinstr.dest().unwrap_or(empty_str).as_str();
@@ -72,6 +66,8 @@ where
     let (symbols, tokens) = first_pass(&code)?;
     println!("Symbols: {:?}", symbols);
     println!("Tokens: {:?}", tokens);
+    let bin = convert_to_bin(tokens, symbols)?;
+    println!("Bin: {:?}", bin);
     Ok(())
 }
 
@@ -104,8 +100,8 @@ fn first_pass(code: &str) -> Result<(SymbolTable, Vec<Token>), ParseError> {
     Ok((symbols, tokens))
 }
 
-fn convert_to_bin(symbols: SymbolTable, tokens: Vec<Token>) -> Result<(), ParseError> {
-    let binary: Vec<u16> = tokens
+fn convert_to_bin(tokens: Vec<Token>, symbols: SymbolTable) -> Result<Vec<u16>, ParseError> {
+    tokens
         .iter()
         .map(|token| match token {
             Token::AInstruction(a) => match a {
@@ -120,13 +116,10 @@ fn convert_to_bin(symbols: SymbolTable, tokens: Vec<Token>) -> Result<(), ParseE
                     }
                 }
             },
-            Token::CInstruction(cinstr) => {
-                Ok(CInstWithSymbols(cinstr, symbols).into())
-            }
+            Token::CInstruction(cinstr) => Ok(CInstWithSymbols(cinstr, &symbols).into()),
             token => Err(ParseError::NonCompilableToken(token.clone())),
         })
-        .collect::<Result<Vec<u16>, ParseError>>()?;
-    todo!()
+        .collect()
 }
 
 // fn second_pass(symbols: SymbolTable, tokens: &mut Vec<Token>) -> Result<Vec<u16>, ParseError> {
