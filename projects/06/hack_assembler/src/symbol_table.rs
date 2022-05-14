@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 
-type HackInstSize = i16;
-type HackMemSize = i16;
-type HackRomSize = i32;
+use thiserror::Error;
+
+pub type HackInstSize = u16;
+pub type HackMemSize = u16;
+pub type HackRomSize = u32;
 const START_ALIAS_ADDRESS: HackMemSize = 0x0010;
 const PREDEF_ALIASES: [(&str, HackMemSize); 23] = [
-    ("SP", 0x0), 
+    ("SP", 0x0),
     ("LCL", 0x1),
-    ("ARG", 0x2), 
+    ("ARG", 0x2),
     ("THIS", 0x3),
     ("THAT", 0x4),
     ("R0", 0x0),
@@ -27,16 +29,12 @@ const PREDEF_ALIASES: [(&str, HackMemSize); 23] = [
     ("R14", 0xe),
     ("R15", 0xf),
     ("SCREEN", SCREEN_MEM),
-    ("KBD", KBD_MEM)
+    ("KBD", KBD_MEM),
 ];
 const SCREEN_MEM: HackMemSize = 0x4000;
 const KBD_MEM: HackMemSize = 0x6000;
 
-const DEST_INSTR: [(&str, HackInstSize); 3] = [
-    ("M", 0b001),
-    ("D", 0b010),
-    ("A", 0b100)
-];
+const DEST_INSTR: [(&str, HackInstSize); 3] = [("M", 0b001), ("D", 0b010), ("A", 0b100)];
 
 const JGT: HackInstSize = 0b001;
 const JEQ: HackInstSize = 0b010;
@@ -51,13 +49,13 @@ const JMP_INSTR: [(&str, HackInstSize); 7] = [
     ("JMP", JLT | JGT | JEQ),
 ];
 
-const C6: i16 = 0b0000001;
-const C5: i16 = 0b0000010;
-const C4: i16 = 0b0000100;
-const C3: i16 = 0b0001000;
-const C2: i16 = 0b0010000;
-const C1: i16 = 0b0100000;
-const A_BIT: i16 = 0b1000000;
+const C6: u16 = 0b0000001;
+const C5: u16 = 0b0000010;
+const C4: u16 = 0b0000100;
+const C3: u16 = 0b0001000;
+const C2: u16 = 0b0010000;
+const C1: u16 = 0b0100000;
+const A_BIT: u16 = 0b1000000;
 
 const COMP_INSTR: [(&str, HackInstSize); 28] = [
     ("0", C5 | C3 | C1),
@@ -87,67 +85,64 @@ const COMP_INSTR: [(&str, HackInstSize); 28] = [
     ("D-M", A_BIT | C6 | C5 | C2),
     ("M-D", A_BIT | C6 | C5 | C4),
     ("D&M", A_BIT),
-    ("D|M", A_BIT | C6 | C4 | C2)
+    ("D|M", A_BIT | C6 | C4 | C2),
 ];
 
-#[derive(Debug)]
+pub const START_CMP_INSTR: u16 = 0b1110000000000000;
+
+#[derive(Debug, Error)]
 pub enum SymbolTableError {
+    #[error("already set error")]
     AlreadySetErr,
 }
 
-pub struct SymbolTable<'a> {
-    aliases: HashMap<&'a str, HackMemSize>,
+#[derive(Debug)]
+pub struct SymbolTable {
+    aliases: HashMap<String, HackMemSize>,
     next_mem_allocation: HackMemSize,
-    labels: HashMap<&'a str, HackRomSize>,
-    dest_instr: HashMap<&'a str, HackInstSize>,
-    jmp_instr: HashMap<&'a str, HackInstSize>,
-    comp_instr: HashMap<&'a str, HackInstSize>,
+    labels: HashMap<String, HackRomSize>,
+    dest_instr: HashMap<String, HackInstSize>,
+    jmp_instr: HashMap<String, HackInstSize>,
+    comp_instr: HashMap<String, HackInstSize>,
 }
 
-impl <'a> Default for SymbolTable<'a> {
+impl<'a> Default for SymbolTable {
     fn default() -> Self {
         SymbolTable::new()
     }
 }
 
-impl<'a> SymbolTable<'a> {
-    pub fn new() -> SymbolTable<'a> {
+impl SymbolTable {
+    pub fn new() -> SymbolTable {
         SymbolTable {
-            aliases: SymbolTable::init_predefined_aliases(),
+            aliases: SymbolTable::init_predefined(PREDEF_ALIASES),
             next_mem_allocation: START_ALIAS_ADDRESS,
             labels: HashMap::new(),
-            dest_instr: SymbolTable::init_dest_instr(),
-            jmp_instr: SymbolTable::init_jmp_instr(),
-            comp_instr: SymbolTable::init_comp_instr(),
+            dest_instr: SymbolTable::init_predefined(DEST_INSTR),
+            jmp_instr: SymbolTable::init_predefined(JMP_INSTR),
+            comp_instr: SymbolTable::init_predefined(COMP_INSTR),
         }
     }
 
-    fn init_predefined_aliases() -> HashMap<&'a str, HackMemSize> {
-        PREDEF_ALIASES.into_iter().collect()
+    fn init_predefined<const N: usize>(
+        predef: [(&str, HackInstSize); N],
+    ) -> HashMap<String, HackInstSize> {
+        predef
+            .into_iter()
+            .map(|val| (val.0.to_string(), val.1))
+            .collect()
     }
 
-    fn init_dest_instr() -> HashMap<&'a str, HackInstSize> {
-        DEST_INSTR.into_iter().collect()
-    }
-
-    fn init_jmp_instr() -> HashMap<&'a str, HackInstSize> {
-        JMP_INSTR.into_iter().collect()
-    }
-
-    fn init_comp_instr() -> HashMap<&'a str, HackInstSize> {
-        COMP_INSTR.into_iter().collect()
-    }
-
-    pub fn add_alias(&mut self, alias: &'a str) -> Result<HackMemSize, SymbolTableError> {
-        if self.aliases.contains_key(alias) {
-            return Err(SymbolTableError::AlreadySetErr)
+    pub fn add_alias(&mut self, alias: String) -> Result<HackMemSize, SymbolTableError> {
+        if self.aliases.contains_key(&alias) {
+            return Err(SymbolTableError::AlreadySetErr);
         }
-        
+
         let location = self.next_mem_allocation;
-        self.next_mem_allocation +=  1;
+        self.next_mem_allocation += 1;
         match self.aliases.insert(alias, location) {
             None => Ok(location),
-            Some(_) => Err(SymbolTableError::AlreadySetErr)
+            Some(_) => Err(SymbolTableError::AlreadySetErr),
         }
     }
 
@@ -155,14 +150,18 @@ impl<'a> SymbolTable<'a> {
         self.aliases.get(alias).copied()
     }
 
-    pub fn add_label(&mut self, label: &'a str, line_no: HackRomSize) -> Result<HackRomSize, SymbolTableError> {
-        if self.labels.contains_key(label) {
-            return Err(SymbolTableError::AlreadySetErr)
+    pub fn add_label(
+        &mut self,
+        label: String,
+        line_no: HackRomSize,
+    ) -> Result<HackRomSize, SymbolTableError> {
+        if self.labels.contains_key(&label) {
+            return Err(SymbolTableError::AlreadySetErr);
         }
 
         match self.labels.insert(label, line_no) {
             None => Ok(line_no),
-            Some(_) => Err(SymbolTableError::AlreadySetErr)
+            Some(_) => Err(SymbolTableError::AlreadySetErr),
         }
     }
 
@@ -180,20 +179,19 @@ impl<'a> SymbolTable<'a> {
             self.dest_instr.get(&tmp[..]).copied()
         });
 
-        println!("{:?}", dest_bits);
-        
-        let result = dest_bits.reduce(|accum: Option<i16>, dest: Option<i16>| {
-            match (accum, dest) {
-                (None, _) => None,
-                (_, None) => None,
-                (Some(a), Some(b)) => Some(a | b)
-            }
-        });
+        let result =
+            dest_bits.reduce(
+                |accum: Option<u16>, dest: Option<u16>| match (accum, dest) {
+                    (None, _) => None,
+                    (_, None) => None,
+                    (Some(a), Some(b)) => Some(a | b),
+                },
+            );
 
         match result {
             None => None,
             Some(None) => None,
-            Some(a) => a
+            Some(a) => a,
         }
     }
 
@@ -203,7 +201,7 @@ impl<'a> SymbolTable<'a> {
 }
 
 #[cfg(test)]
-mod tests {    
+mod tests {
     use super::*;
     use assert_matches::assert_matches;
 
@@ -217,36 +215,36 @@ mod tests {
     }
 
     #[test]
-    fn it_does_not_permit_redecleration_of_symbols() {
+    fn it_does_not_permit_redeclaration_of_symbols() {
         let mut symbol_table = SymbolTable::new();
-        let result = symbol_table.add_alias(PREDEF_ALIASES[0].0);
+        let result = symbol_table.add_alias(PREDEF_ALIASES[0].0.to_string());
         assert_matches!(result, Err(SymbolTableError::AlreadySetErr));
     }
 
     #[test]
     fn it_allocates_0x0010_for_first_alias_address() {
         let mut symbol_table = SymbolTable::new();
-        let result = symbol_table.add_alias("test");
+        let result = symbol_table.add_alias("test".to_string());
         assert_matches!(result, Ok(0x0010));
     }
 
     #[test]
     fn it_allocates_incremental_locations_for_subsequent_aliases() {
         let mut symbol_table = SymbolTable::new();
-        let result = symbol_table.add_alias("test1");
+        let result = symbol_table.add_alias("test1".to_string());
         assert_matches!(result, Ok(0x0010));
-        let result = symbol_table.add_alias("test2");
+        let result = symbol_table.add_alias("test2".to_string());
         assert_matches!(result, Ok(0x0011));
-        let result = symbol_table.add_alias("test3");
+        let result = symbol_table.add_alias("test3".to_string());
         assert_matches!(result, Ok(0x0012));
     }
 
     #[test]
     fn it_returns_allocated_address_for_aliases() {
         let mut symbol_table = SymbolTable::new();
-        symbol_table.add_alias("test1").unwrap();
+        symbol_table.add_alias("test1".to_string()).unwrap();
         assert_matches!(symbol_table.get_addr("test1"), Some(0x0010));
-        symbol_table.add_alias("test2").unwrap();
+        symbol_table.add_alias("test2".to_string()).unwrap();
         assert_matches!(symbol_table.get_addr("test1"), Some(0x0010));
         assert_matches!(symbol_table.get_addr("test2"), Some(0x0011));
     }
@@ -255,23 +253,26 @@ mod tests {
     fn it_returns_none_for_unrecognised_alias() {
         let mut symbol_table = SymbolTable::new();
         assert_matches!(symbol_table.get_addr("test1"), None);
-        symbol_table.add_alias("test1").unwrap();
-        assert_matches!(symbol_table.get_addr("test1"), Some(0x0010));        
+        symbol_table.add_alias("test1".to_string()).unwrap();
+        assert_matches!(symbol_table.get_addr("test1"), Some(0x0010));
     }
 
     #[test]
     fn it_does_not_permit_redecleration_of_labels() {
         let mut symbol_table = SymbolTable::new();
-        symbol_table.add_label("test1", 1).unwrap();
-        assert_matches!(symbol_table.add_label("test1", 2), Err(SymbolTableError::AlreadySetErr));
+        symbol_table.add_label("test1".to_string(), 1).unwrap();
+        assert_matches!(
+            symbol_table.add_label("test1".to_string(), 2),
+            Err(SymbolTableError::AlreadySetErr)
+        );
         assert_eq!(*symbol_table.labels.get("test1").unwrap(), 1);
     }
 
     #[test]
     fn it_sets_label_to_supplied_line_no() {
         let mut symbol_table = SymbolTable::new();
-        symbol_table.add_label("test1", 1).unwrap();
-        symbol_table.add_label("test2", 3).unwrap();
+        symbol_table.add_label("test1".to_string(), 1).unwrap();
+        symbol_table.add_label("test2".to_string(), 3).unwrap();
         assert_eq!(symbol_table.get_line_no("test1"), Some(1));
         assert_eq!(symbol_table.get_line_no("test2"), Some(3));
     }
@@ -279,10 +280,10 @@ mod tests {
     #[test]
     fn it_keeps_labels_and_aliases_seperate() {
         let mut symbol_table = SymbolTable::new();
-        symbol_table.add_label("SCREEN", 0x1).unwrap();
+        symbol_table.add_label("SCREEN".to_string(), 0x1).unwrap();
         assert_eq!(symbol_table.get_addr("SCREEN"), Some(SCREEN_MEM));
-        symbol_table.add_alias("test1").unwrap();
-        symbol_table.add_label("test1", 0x1).unwrap();
+        symbol_table.add_alias("test1".to_string()).unwrap();
+        symbol_table.add_label("test1".to_string(), 0x1).unwrap();
 
         assert_eq!(symbol_table.get_addr("test1"), Some(START_ALIAS_ADDRESS));
         assert_matches!(symbol_table.get_line_no("test1"), Some(0x1));
