@@ -1,7 +1,8 @@
 use std::io::{BufReader, Read};
 
 use crate::{
-    symbol_table::{HackRomSize, SymbolTable, SymbolTableError},
+    instructions::{AInstruction, CInstruction},
+    symbol_table::{HackRomSize, SymbolTable, SymbolTableError, START_CMP_INSTR},
     tokenizer::{tokenize, Token, TokenError},
 };
 
@@ -13,6 +14,10 @@ pub enum ParseError {
     TokenError(TokenError),
     #[error("symbol table error: {0}")]
     SymbolTableError(SymbolTableError),
+    #[error("non-compilable token: {0}")]
+    NonCompilableToken(Token),
+    #[error("address not found for alias: {0}")]
+    AliasNotFound(String),
 }
 
 impl From<std::io::Error> for ParseError {
@@ -30,6 +35,28 @@ impl From<TokenError> for ParseError {
 impl From<SymbolTableError> for ParseError {
     fn from(e: SymbolTableError) -> Self {
         Self::SymbolTableError(e)
+    }
+}
+
+struct CInstWithSymbols<'a>(&'a CInstruction, &'a SymbolTable);
+
+impl From<&CInstWithSymbols<'_>> for (&CInstruction, &SymbolTable) {
+    fn from(cinst_with_symbols: &CInstWithSymbols<'_>) -> Self {
+        (cinst_with_symbols.0, cinst_with_symbols.1)
+    }
+}
+
+impl From<&CInstWithSymbols<'_>> for u16 {
+    fn from(cinst_with_symbols: &CInstWithSymbols<'_>) -> Self {
+        let (cinstr, symbols) = cinst_with_symbols.into();
+        let empty_str = &"".to_owned();
+        let comp = cinstr.comp();
+        let dest = cinstr.dest().unwrap_or(empty_str).as_str();
+        let jump = cinstr.jump().unwrap_or(empty_str).as_str();
+        let comp = symbols.get_comp_instr(comp).unwrap_or_default();
+        let dest = symbols.get_dest_instr(dest).unwrap_or_default();
+        let jump = symbols.get_jmp_instr(jump).unwrap_or_default();
+        START_CMP_INSTR | comp | dest | jump
     }
 }
 
@@ -56,29 +83,49 @@ fn first_pass(code: &str) -> Result<(SymbolTable, Vec<Token>), ParseError> {
         if let Some(token) = tokenize(line)? {
             match token {
                 Token::Label(ref label) => {
-                    symbols.add_label(label.clone(), (tokens.len() + 1) as HackRomSize)?;
+                    symbols.add_label(label.clone(), (tokens.len()) as HackRomSize)?;
                 }
                 Token::AInstruction(ref alias) => {
-                    if symbols.get_addr(alias).is_none() && symbols.get_line_no(alias).is_none() {
-                        symbols.add_alias(alias.clone())?;
+                    match alias {
+                        AInstruction::Alias(alias)
+                            if symbols.get_addr(alias).is_none()
+                                && symbols.get_line_no(alias).is_none() =>
+                        {
+                            symbols.add_alias(alias.clone())?;
+                        }
+                        _ => {}
                     }
+                    tokens.push(token);
                 }
-                _ => (),
+                Token::CInstruction(_) => tokens.push(token),
             }
-            tokens.push(token);
         }
     }
     Ok((symbols, tokens))
 }
 
 fn convert_to_bin(symbols: SymbolTable, tokens: Vec<Token>) -> Result<(), ParseError> {
-    let binary = tokens.iter().map(|token| {
-        match token {
-            Token::Label(l) => ,
-            Token::AInstruction(_) => todo!(),
-            Token::CInstruction(_) => todo!(),
-        }
-    }).collect();
+    let binary: Vec<u16> = tokens
+        .iter()
+        .map(|token| match token {
+            Token::AInstruction(a) => match a {
+                AInstruction::RawAddr(addr) => Ok(*addr),
+                AInstruction::Alias(alias) => {
+                    if let Some(addr) = symbols.get_addr(alias) {
+                        Ok(addr)
+                    } else if let Some(addr) = symbols.get_line_no(alias) {
+                        Ok(addr)
+                    } else {
+                        Err(ParseError::AliasNotFound(alias.clone()))
+                    }
+                }
+            },
+            Token::CInstruction(cinstr) => {
+                Ok(CInstWithSymbols(cinstr, symbols).into())
+            }
+            token => Err(ParseError::NonCompilableToken(token.clone())),
+        })
+        .collect::<Result<Vec<u16>, ParseError>>()?;
     todo!()
 }
 

@@ -1,4 +1,6 @@
-#[derive(Debug, PartialEq)]
+use std::fmt::Display;
+
+#[derive(Debug, PartialEq, Clone)]
 pub struct CInstruction {
     dest: Option<String>,
     comp: String,
@@ -20,5 +22,11 @@ impl CInstruction {
 
     pub fn jump(&self) -> Option<&String> {
         self.jump.as_ref()
+    }
+}
+
+impl Display for CInstruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", &self)
     }
 }

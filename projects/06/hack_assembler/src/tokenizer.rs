@@ -1,12 +1,24 @@
+use std::fmt::{Display};
+
 use thiserror::Error;
 
-use crate::cinstruction::CInstruction;
+use crate::{instructions::{CInstruction, AInstruction}, symbol_table::HackMemSize};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Label(String),
-    AInstruction(String),
+    AInstruction(AInstruction),
     CInstruction(CInstruction)
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            Token::Label(l) => write!(f, "label: {}", l),
+            Token::AInstruction(a) => write!(f, "ainstr: {}", a),
+            Token::CInstruction(c) => write!(f, "cinstr: {}", c),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Error)]
@@ -83,6 +95,10 @@ fn extract_label(line: &str, start_idx: usize) -> Result<Option<Token>, TokenErr
 
 fn extract_a_instruction(line: &str, start_idx: usize) -> Result<Option<Token>, TokenError> {
     let mut idx = start_idx;
+    if let Ok(addr) = line[start_idx..].parse::<HackMemSize>() {
+        return Ok(Some(Token::AInstruction(AInstruction::RawAddr(addr))));
+    }
+
     if line.len() <= idx {
         Err(TokenError::EmptyAInstructionError)
     } else if !is_valid_symbol_first_char(line.chars().nth(start_idx).unwrap()) {
@@ -102,7 +118,8 @@ fn extract_a_instruction(line: &str, start_idx: usize) -> Result<Option<Token>, 
             }
             idx += 1;
         }
-        Ok(Some(Token::AInstruction(line[start_idx..].to_string())))
+        let ainst = AInstruction::Alias(line[start_idx..].to_string());
+        Ok(Some(Token::AInstruction(ainst)))
     }
 }
 
@@ -198,16 +215,17 @@ mod tests {
 
     #[test]
     fn it_extracts_a_instr() {
-        assert_eq!(tokenize("@test"), Ok(Some(Token::AInstruction("test".to_string()))));
-        assert_eq!(tokenize("@test1"), Ok(Some(Token::AInstruction("test1".to_string()))));
-        assert_eq!(tokenize("@test$"), Ok(Some(Token::AInstruction("test$".to_string()))));
-        assert_eq!(tokenize("@test_"), Ok(Some(Token::AInstruction("test_".to_string()))));
-        assert_eq!(tokenize("@test."), Ok(Some(Token::AInstruction("test.".to_string()))));
-        assert_eq!(tokenize("@test:"), Ok(Some(Token::AInstruction("test:".to_string()))));
-        assert_eq!(tokenize("@test//with comment"), Ok(Some(Token::AInstruction("test".to_string()))));
-        assert_eq!(tokenize("@test   //with trailing whitespace and comment"), Ok(Some(Token::AInstruction("test".to_string()))));
-        assert_eq!(tokenize("    @test//with leading whitespace and comment"), Ok(Some(Token::AInstruction("test".to_string()))));
-        assert_eq!(tokenize("    @test    //with leading and trailing whitespace and comment"), Ok(Some(Token::AInstruction("test".to_string()))));
+        assert_eq!(tokenize("@test"), Ok(Some(Token::AInstruction(AInstruction::Alias("test".to_string())))));
+        assert_eq!(tokenize("@test1"), Ok(Some(Token::AInstruction(AInstruction::Alias("test1".to_string())))));
+        assert_eq!(tokenize("@test$"), Ok(Some(Token::AInstruction(AInstruction::Alias("test$".to_string())))));
+        assert_eq!(tokenize("@test_"), Ok(Some(Token::AInstruction(AInstruction::Alias("test_".to_string())))));
+        assert_eq!(tokenize("@test."), Ok(Some(Token::AInstruction(AInstruction::Alias("test.".to_string())))));
+        assert_eq!(tokenize("@test:"), Ok(Some(Token::AInstruction(AInstruction::Alias("test:".to_string())))));
+        assert_eq!(tokenize("@test//with comment"), Ok(Some(Token::AInstruction(AInstruction::Alias("test".to_string())))));
+        assert_eq!(tokenize("@test   //with trailing whitespace and comment"), Ok(Some(Token::AInstruction(AInstruction::Alias("test".to_string())))));
+        assert_eq!(tokenize("    @test//with leading whitespace and comment"), Ok(Some(Token::AInstruction(AInstruction::Alias("test".to_string())))));
+        assert_eq!(tokenize("    @test    //with leading and trailing whitespace and comment"), Ok(Some(Token::AInstruction(AInstruction::Alias("test".to_string())))));
+        assert_eq!(tokenize("@123"), Ok(Some(Token::AInstruction(AInstruction::RawAddr(123)))));
     }
 
     #[test]

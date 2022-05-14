@@ -4,7 +4,7 @@ use thiserror::Error;
 
 pub type HackInstSize = u16;
 pub type HackMemSize = u16;
-pub type HackRomSize = u32;
+pub type HackRomSize = u16;
 const START_ALIAS_ADDRESS: HackMemSize = 0x0010;
 const PREDEF_ALIASES: [(&str, HackMemSize); 23] = [
     ("SP", 0x0),
