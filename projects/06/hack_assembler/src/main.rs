@@ -1,6 +1,10 @@
 use clap::Parser;
-use hack_assembler::{tokenize, FileReader, Readable};
-use std::error::Error;
+use hack_assembler::assemble;
+use std::{
+    error::Error,
+    fs::File,
+    io::{BufReader, BufWriter},
+};
 
 ///An assembler for the Hack assembly languagae from the nand-to-tetris course
 #[derive(Parser, Debug)]
@@ -14,15 +18,8 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let reader = FileReader::new(args.in_file);
-    let contents = reader.read()?;
-    let lines: Vec<&str> = contents.lines().collect();
-    let tokens = tokenize(lines[0])?;
-    dbg!(tokens.unwrap());
+    let reader = BufReader::new(File::open(args.in_file)?);
+    let writer = BufWriter::new(File::create(args.out_file)?);
+    assemble(reader, writer)?;
     Ok(())
 }
-
-// fn assemble(path: String) -> Result<AsmParser, IoError> {
-//     let parser = AsmParser::new(&path)?;
-//     Ok(parser)
-// }

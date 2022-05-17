@@ -34,7 +34,8 @@ const PREDEF_ALIASES: [(&str, HackMemSize); 23] = [
 const SCREEN_MEM: HackMemSize = 0x4000;
 const KBD_MEM: HackMemSize = 0x6000;
 
-const DEST_INSTR: [(&str, HackInstSize); 3] = [("M", 0b001), ("D", 0b010), ("A", 0b100)];
+const DEST_INSTR: [(&str, HackInstSize); 3] =
+    [("M", 0b001 << 3), ("D", 0b010 << 3), ("A", 0b100 << 3)];
 
 const JGT: HackInstSize = 0b001;
 const JEQ: HackInstSize = 0b010;
@@ -49,13 +50,13 @@ const JMP_INSTR: [(&str, HackInstSize); 7] = [
     ("JMP", JLT | JGT | JEQ),
 ];
 
-const C6: u16 = 0b0000001;
-const C5: u16 = 0b0000010;
-const C4: u16 = 0b0000100;
-const C3: u16 = 0b0001000;
-const C2: u16 = 0b0010000;
-const C1: u16 = 0b0100000;
-const A_BIT: u16 = 0b1000000;
+const C6: u16 = 0b0000001 << 6;
+const C5: u16 = 0b0000010 << 6;
+const C4: u16 = 0b0000100 << 6;
+const C3: u16 = 0b0001000 << 6;
+const C2: u16 = 0b0010000 << 6;
+const C1: u16 = 0b0100000 << 6;
+const A_BIT: u16 = 0b1000000 << 6;
 
 const COMP_INSTR: [(&str, HackInstSize); 28] = [
     ("0", C5 | C3 | C1),
@@ -88,7 +89,7 @@ const COMP_INSTR: [(&str, HackInstSize); 28] = [
     ("D|M", A_BIT | C6 | C4 | C2),
 ];
 
-pub const START_CMP_INSTR: u16 = 0b1110000000000000;
+pub const START_CMP_INSTR: u16 = 0b111 << 13;
 
 #[derive(Debug, Error)]
 pub enum SymbolTableError {
@@ -305,12 +306,12 @@ mod tests {
     fn it_provides_bits_for_dest_instructions() {
         let symbol_table = SymbolTable::new();
         println!("{:?}", symbol_table.dest_instr);
-        assert_eq!(symbol_table.get_dest_instr("M"), Some(0b001));
-        assert_eq!(symbol_table.get_dest_instr("D"), Some(0b010));
-        assert_eq!(symbol_table.get_dest_instr("MD"), Some(0b011));
-        assert_eq!(symbol_table.get_dest_instr("A"), Some(0b100));
-        assert_eq!(symbol_table.get_dest_instr("AM"), Some(0b101));
-        assert_eq!(symbol_table.get_dest_instr("AD"), Some(0b110));
-        assert_eq!(symbol_table.get_dest_instr("AMD"), Some(0b111));
+        assert_eq!(symbol_table.get_dest_instr("M"), Some(0b001 << 3));
+        assert_eq!(symbol_table.get_dest_instr("D"), Some(0b010 << 3));
+        assert_eq!(symbol_table.get_dest_instr("MD"), Some(0b011 << 3));
+        assert_eq!(symbol_table.get_dest_instr("A"), Some(0b100 << 3));
+        assert_eq!(symbol_table.get_dest_instr("AM"), Some(0b101 << 3));
+        assert_eq!(symbol_table.get_dest_instr("AD"), Some(0b110 << 3));
+        assert_eq!(symbol_table.get_dest_instr("AMD"), Some(0b111 << 3));
     }
 }

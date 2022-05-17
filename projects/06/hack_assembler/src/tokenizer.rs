@@ -71,7 +71,7 @@ fn extract_label(line: &str, start_idx: usize) -> Result<Option<Token>, TokenErr
     }
     let length = line.len();
     for c in line.chars().skip(start_idx) {
-        idx +=1; 
+        idx += 1; 
         match c {
             ')' => {
                 break;

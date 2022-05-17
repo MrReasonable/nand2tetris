@@ -9,33 +9,15 @@ use crate::{
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
     #[error("i/o error: {0}")]
-    IoError(std::io::Error),
+    IoError(#[from] std::io::Error),
     #[error("tokenize error: {0}")]
-    TokenError(TokenError),
+    TokenError(#[from] TokenError),
     #[error("symbol table error: {0}")]
-    SymbolTableError(SymbolTableError),
+    SymbolTableError(#[from] SymbolTableError),
     #[error("non-compilable token: {0}")]
     NonCompilableToken(Token),
     #[error("address not found for alias: {0}")]
     AliasNotFound(String),
-}
-
-impl From<std::io::Error> for ParseError {
-    fn from(e: std::io::Error) -> Self {
-        Self::IoError(e)
-    }
-}
-
-impl From<TokenError> for ParseError {
-    fn from(e: TokenError) -> Self {
-        Self::TokenError(e)
-    }
-}
-
-impl From<SymbolTableError> for ParseError {
-    fn from(e: SymbolTableError) -> Self {
-        Self::SymbolTableError(e)
-    }
 }
 
 struct CInstWithSymbols<'a>(&'a CInstruction, &'a SymbolTable);
@@ -54,21 +36,16 @@ impl From<CInstWithSymbols<'_>> for u16 {
     }
 }
 
-pub fn parse<R>(
-    source: &mut BufReader<R>,
-    // target: BufWriter<W>,
-) -> Result<(), ParseError>
+pub fn parse<R>(source: &mut BufReader<R>) -> Result<Vec<String>, ParseError>
 where
     R: Read,
 {
     let mut code = String::new();
     source.read_to_string(&mut code)?;
     let (symbols, tokens) = first_pass(&code)?;
-    println!("Symbols: {:?}", symbols);
-    println!("Tokens: {:?}", tokens);
-    let bin = convert_to_bin(tokens, symbols)?;
-    println!("Bin: {:?}", bin);
-    Ok(())
+    let bin = convert_to_bin(symbols, tokens)?;
+    let ret: Vec<String> = bin.iter().map(|b| bin_string(*b)).collect();
+    Ok(ret)
 }
 
 fn first_pass(code: &str) -> Result<(SymbolTable, Vec<Token>), ParseError> {
@@ -81,26 +58,14 @@ fn first_pass(code: &str) -> Result<(SymbolTable, Vec<Token>), ParseError> {
                 Token::Label(ref label) => {
                     symbols.add_label(label.clone(), (tokens.len()) as HackRomSize)?;
                 }
-                Token::AInstruction(ref alias) => {
-                    match alias {
-                        AInstruction::Alias(alias)
-                            if symbols.get_addr(alias).is_none()
-                                && symbols.get_line_no(alias).is_none() =>
-                        {
-                            symbols.add_alias(alias.clone())?;
-                        }
-                        _ => {}
-                    }
-                    tokens.push(token);
-                }
-                Token::CInstruction(_) => tokens.push(token),
+                Token::CInstruction(_) | Token::AInstruction(_) => tokens.push(token),
             }
         }
     }
     Ok((symbols, tokens))
 }
 
-fn convert_to_bin(tokens: Vec<Token>, symbols: SymbolTable) -> Result<Vec<u16>, ParseError> {
+fn convert_to_bin(mut symbols: SymbolTable, tokens: Vec<Token>) -> Result<Vec<u16>, ParseError> {
     tokens
         .iter()
         .map(|token| match token {
@@ -112,7 +77,9 @@ fn convert_to_bin(tokens: Vec<Token>, symbols: SymbolTable) -> Result<Vec<u16>, 
                     } else if let Some(addr) = symbols.get_line_no(alias) {
                         Ok(addr)
                     } else {
-                        Err(ParseError::AliasNotFound(alias.clone()))
+                        symbols
+                            .add_alias(alias.clone())
+                            .map_err(ParseError::SymbolTableError)
                     }
                 }
             },
@@ -122,9 +89,20 @@ fn convert_to_bin(tokens: Vec<Token>, symbols: SymbolTable) -> Result<Vec<u16>, 
         .collect()
 }
 
-// fn second_pass(symbols: SymbolTable, tokens: &mut Vec<Token>) -> Result<Vec<u16>, ParseError> {
-//     todo!()
-// }
+fn bin_string(mut val: u16) -> String {
+    let mut ret_string = "".to_owned();
+    for _ in 0..16 {
+        let mut new_string = if 1_u16 & val == 0 {
+            "0".to_owned()
+        } else {
+            "1".to_owned()
+        };
+        new_string.push_str(&ret_string);
+        ret_string = new_string;
+        val >>= 1;
+    }
+    ret_string
+}
 
 #[cfg(test)]
 mod test {
@@ -138,10 +116,16 @@ mod test {
     }
 
     #[test]
-    fn compile_max() {
+    fn it_generates_expected_binary_code_for_input() {
         let mut reader = setup(Path::new("./test_files/Max.asm"));
-        // let mem_store = Vec::new();
-        // let writer = BufWriter::new(mem_store);
-        parse(&mut reader).unwrap();
+        let parsed = parse(&mut reader).unwrap();
+        let mut reader = setup(Path::new("./test_files/test-cmp.hack"));
+        let mut expected = String::new();
+        reader.read_to_string(&mut expected).unwrap();
+        let expected: Vec<String> = expected
+            .split_terminator("\n")
+            .map(|s| s.to_owned())
+            .collect();
+        assert_eq!(parsed, expected);
     }
 }
