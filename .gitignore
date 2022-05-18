@@ -2,3 +2,4 @@
 *.dat
 target
 tools
+!projects/tools
