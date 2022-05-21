@@ -1,5 +1,5 @@
 use clap::Parser;
-use hack_assembler::assemble;
+use hack_assembler::parse;
 use std::{
     error::Error,
     fs::File,
@@ -18,8 +18,8 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let reader = BufReader::new(File::open(args.in_file)?);
-    let writer = BufWriter::new(File::create(args.out_file)?);
-    assemble(reader, writer)?;
+    let mut reader = BufReader::new(File::open(args.in_file)?);
+    let mut writer = BufWriter::new(File::create(args.out_file)?);
+    parse(&mut reader, &mut writer)?;
     Ok(())
 }

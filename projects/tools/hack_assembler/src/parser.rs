@@ -1,4 +1,9 @@
-use std::io::{BufReader, Read};
+use std::{
+    fs::File,
+    io::{BufRead, BufReader, BufWriter, Read, Seek, Write},
+};
+
+use tempfile::tempfile;
 
 use crate::{
     instructions::{AInstruction, CInstruction},
@@ -36,57 +41,75 @@ impl From<CInstWithSymbols<'_>> for u16 {
     }
 }
 
-pub fn parse<R>(source: &mut BufReader<R>) -> Result<Vec<String>, ParseError>
+pub fn parse<R, W>(source: &mut BufReader<R>, dest: &mut BufWriter<W>) -> Result<(), ParseError>
 where
     R: Read,
+    W: Write,
 {
-    let mut code = String::new();
-    source.read_to_string(&mut code)?;
-    let (symbols, tokens) = first_pass(&code)?;
-    let bin = convert_to_bin(symbols, tokens)?;
-    let ret: Vec<String> = bin.iter().map(|b| bin_string(*b)).collect();
-    Ok(ret)
+    let (symbols, mut parsed_source) = first_pass(source)?;
+    Ok(convert_to_bin(symbols, &mut parsed_source, dest)?)
 }
 
-fn first_pass(code: &str) -> Result<(SymbolTable, Vec<Token>), ParseError> {
+fn first_pass<R: Read>(
+    code: &mut BufReader<R>,
+) -> Result<(SymbolTable, BufReader<File>), ParseError> {
     let mut symbols = SymbolTable::new();
-    let mut tokens = Vec::new();
+    let mut tmp_file = tempfile()?;
+    let mut line = String::new();
+    let mut line_counter = 0;
 
-    for line in code.lines() {
-        if let Some(token) = tokenize(line)? {
+    while code.read_line(&mut line)? > 0 {
+        let trimmed_line = line.trim();
+        if let Some(token) = tokenize(trimmed_line)? {
             match token {
                 Token::Label(ref label) => {
-                    symbols.add_label(label.clone(), (tokens.len()) as HackRomSize)?;
+                    symbols.add_label(label.clone(), (line_counter) as HackRomSize)?;
                 }
-                Token::CInstruction(_) | Token::AInstruction(_) => tokens.push(token),
+                Token::CInstruction(_) | Token::AInstruction(_) => {
+                    writeln!(tmp_file, "{}", trimmed_line)?;
+                    line_counter += 1;
+                }
             }
         }
+        line = "".to_owned();
     }
-    Ok((symbols, tokens))
+    tmp_file.rewind()?;
+    Ok((symbols, BufReader::new(tmp_file)))
 }
 
-fn convert_to_bin(mut symbols: SymbolTable, tokens: Vec<Token>) -> Result<Vec<u16>, ParseError> {
-    tokens
-        .iter()
-        .map(|token| match token {
-            Token::AInstruction(a) => match a {
-                AInstruction::RawAddr(addr) => Ok(*addr),
-                AInstruction::Alias(alias) => {
-                    if let Some(addr) = symbols.get_addr(alias) {
-                        Ok(addr)
-                    } else if let Some(addr) = symbols.get_line_no(alias) {
-                        Ok(addr)
-                    } else {
-                        symbols
-                            .add_alias(alias.clone())
-                            .map_err(ParseError::SymbolTableError)
+fn convert_to_bin<W: Write>(
+    mut symbols: SymbolTable,
+    tokens: &mut BufReader<File>,
+    target: &mut BufWriter<W>,
+) -> Result<(), ParseError> {
+    let mut line = String::new();
+    while tokens.read_line(&mut line)? > 0 {
+        let trimmed_line = line.trim();
+        if let Some(code) = tokenize(trimmed_line)? {
+            let token = match code {
+                Token::AInstruction(a) => match a {
+                    AInstruction::RawAddr(addr) => Ok(addr),
+                    AInstruction::Alias(ref alias) => {
+                        if let Some(addr) = symbols.get_addr(alias) {
+                            Ok(addr)
+                        } else if let Some(addr) = symbols.get_line_no(alias) {
+                            Ok(addr)
+                        } else {
+                            symbols
+                                .add_alias(alias.clone())
+                                .map_err(ParseError::SymbolTableError)
+                        }
                     }
-                }
-            },
-            Token::CInstruction(cinstr) => Ok(CInstWithSymbols(cinstr, &symbols).into()),
-            token => Err(ParseError::NonCompilableToken(token.clone())),
-        })
-        .collect()
+                },
+                Token::CInstruction(ref cinstr) => Ok(CInstWithSymbols(cinstr, &symbols).into()),
+                token => Err(ParseError::NonCompilableToken(token.clone())),
+            }?;
+            let bin = bin_string(token);
+            writeln!(target, "{}", bin)?;
+        }
+        line = "".to_owned();
+    }
+    Ok(())
 }
 
 fn bin_string(mut val: u16) -> String {
@@ -118,14 +141,12 @@ mod test {
     #[test]
     fn it_generates_expected_binary_code_for_input() {
         let mut reader = setup(Path::new("./test_files/Max.asm"));
-        let parsed = parse(&mut reader).unwrap();
+        let mut writer = BufWriter::new(Vec::new());
+        parse(&mut reader, &mut writer).unwrap();
         let mut reader = setup(Path::new("./test_files/test-cmp.hack"));
         let mut expected = String::new();
         reader.read_to_string(&mut expected).unwrap();
-        let expected: Vec<String> = expected
-            .split_terminator("\n")
-            .map(|s| s.to_owned())
-            .collect();
-        assert_eq!(parsed, expected);
+        let actual = String::from_utf8(writer.into_inner().unwrap()).unwrap();
+        assert_eq!(actual, expected);
     }
 }
