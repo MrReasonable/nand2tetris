@@ -1,13 +1,12 @@
 use std::{
-    ffi::{OsStr, OsString},
     fs::{read_dir, File},
-    io::{self, BufReader, BufWriter},
+    io::{self, BufReader, BufWriter, Write},
     path::{Path, PathBuf},
 };
 
 use crate::{
-    codewriter::{CodeWriter, CodeWriterError},
-    parser::{ParseError, Parser},
+    code_writer::{CodeWriter, CodeWriterError},
+    parser::{self, ParseError, ParsedCmd, Parser},
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -22,9 +21,11 @@ pub enum TranslatorError {
     CodeWriter(#[from] CodeWriterError),
 }
 
-pub fn translate(input_path: &str) -> Result<(), TranslatorError> {
+pub fn translate<W: Write>(
+    input_path: &str,
+    code_writer: &mut CodeWriter<W>,
+) -> Result<(), TranslatorError> {
     let path = Path::new(input_path);
-    let mut code_writer = create_code_writer(path)?;
 
     if path.is_dir() {
         let mut entries = read_dir(path)?
@@ -41,25 +42,29 @@ pub fn translate(input_path: &str) -> Result<(), TranslatorError> {
             .collect::<Result<Vec<_>, io::Error>>()?;
         entries.sort();
         for entry in entries {
-            parse_file(&*entry, &mut code_writer)?;
+            parse_file(&*entry, code_writer)?;
         }
     } else {
-        parse_file(path, &mut code_writer)?;
+        parse_file(path, code_writer)?;
     }
+    code_writer.write(parser::Command::new("".to_owned(), ParsedCmd::Terminate))?;
     Ok(())
 }
 
-fn create_code_writer(path: &Path) -> Result<CodeWriter<File>, TranslatorError> {
+pub fn create_code_writer(path: &Path) -> Result<CodeWriter<BufWriter<File>>, TranslatorError> {
     let name = get_path_name(path)?;
     let out_file = File::options()
         .write(true)
         .create(true)
         .open(format!("{}.asm", name))?;
     let out_buffer = BufWriter::new(out_file);
-    Ok(CodeWriter::new(out_buffer))
+    Ok(CodeWriter::new(out_buffer)?)
 }
 
-fn parse_file(in_file: &Path, code_writer: &mut CodeWriter<File>) -> Result<(), TranslatorError> {
+fn parse_file<W: Write>(
+    in_file: &Path,
+    code_writer: &mut CodeWriter<W>,
+) -> Result<(), TranslatorError> {
     let file = File::open(in_file)?;
     let parser = Parser::new(BufReader::new(file));
     code_writer.set_namespace(get_path_name(in_file)?);

@@ -11,3 +11,6 @@ clap = { version = "3.1.18", features = ["derive"] }
 lazy_static = "1.4.0"
 phf = { version = "0.10.1", features = ["macros"] }
 thiserror = "1.0.31"
+
+[dev-dependencies]
+test-case = "2.1.0"

@@ -1,7 +1,7 @@
-use std::error::Error;
+use std::{error::Error, path::Path};
 
 use clap::Parser;
-use vm_translator::translator::translate;
+use vm_translator::translator::{create_code_writer, translate};
 
 ///A translator for the Jack VM to Hack assembly language from the nand-to-tetris course
 #[derive(Parser, Debug)]
@@ -13,5 +13,6 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    Ok(translate(&args.input_path)?)
+    let mut code_writer = create_code_writer(Path::new(&args.input_path))?;
+    Ok(translate(&args.input_path, &mut code_writer)?)
 }

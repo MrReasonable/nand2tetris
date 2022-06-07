@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     io::{self, BufRead, BufReader, Lines, Read},
     iter::Peekable,
     num::ParseIntError,
@@ -58,26 +59,26 @@ pub enum Arithmetic {
 #[derive(PartialEq, Debug, Clone)]
 pub enum ParsedCmd {
     Arithmetic(Arithmetic),
-    Constant(HackMemSize),
-    Push(Stack, HackMemSize),
-    Pop(Stack, HackMemSize),
+    Push(PushSegment, HackMemSize),
+    Pop(PopSegment, HackMemSize),
     Label(String),
     Goto(String),
     If(String),
     Function(String, HackMemSize),
     Call(String, HackMemSize),
     Return,
+    Terminate,
     Noop,
 }
 
-#[derive(Debug, PartialEq)]
-enum StackType {
-    Stack(Stack),
-    Constant,
+#[derive(Debug, PartialEq, Clone, Copy, Hash, Eq)]
+pub enum Segment {
+    PushSegment(PushSegment),
+    PopSegment(PopSegment),
 }
 
 #[derive(Debug, PartialEq, Clone, Copy, Hash, Eq)]
-pub enum Stack {
+pub enum PushSegment {
     Argument,
     Local,
     Static,
@@ -85,6 +86,42 @@ pub enum Stack {
     That,
     Pointer,
     Temp,
+    Constant,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy, Hash, Eq)]
+pub enum PopSegment {
+    Argument,
+    Local,
+    Static,
+    This,
+    That,
+    Pointer,
+    Temp,
+}
+
+impl From<PushSegment> for Segment {
+    fn from(p: PushSegment) -> Self {
+        Segment::PushSegment(p)
+    }
+}
+
+impl From<PopSegment> for Segment {
+    fn from(p: PopSegment) -> Self {
+        Segment::PopSegment(p)
+    }
+}
+
+impl Display for PushSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Display for PopSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 #[derive(Debug)]
@@ -104,14 +141,25 @@ static STR_ARITHMETIC: phf::Map<&str, Arithmetic> = phf_map! {
     "not" =>  Arithmetic::Not,
 };
 
-static STR_STACK: phf::Map<&str, Stack> = phf_map! {
-    "argument" =>  Stack::Argument,
-    "local" =>  Stack::Local,
-    "static" =>  Stack::Static,
-    "this" =>  Stack::This,
-    "that" =>  Stack::That,
-    "pointer" =>  Stack::Pointer,
-    "temp" =>  Stack::Temp,
+static STR_PUSH_SEGMENT: phf::Map<&str, PushSegment> = phf_map! {
+    "argument" =>  PushSegment::Argument,
+    "local" =>  PushSegment::Local,
+    "static" =>  PushSegment::Static,
+    "this" =>  PushSegment::This,
+    "that" =>  PushSegment::That,
+    "pointer" =>  PushSegment::Pointer,
+    "temp" =>  PushSegment::Temp,
+    "constant" => PushSegment::Constant,
+};
+
+static STR_POP_SEGMENT: phf::Map<&str, PopSegment> = phf_map! {
+    "argument" =>  PopSegment::Argument,
+    "local" =>  PopSegment::Local,
+    "static" =>  PopSegment::Static,
+    "this" =>  PopSegment::This,
+    "that" =>  PopSegment::That,
+    "pointer" =>  PopSegment::Pointer,
+    "temp" =>  PopSegment::Temp
 };
 
 impl TryFrom<&str> for ParsedCmd {
@@ -133,27 +181,21 @@ impl TryFrom<&str> for ParsedCmd {
                 }
             }
             ref tokens if tokens.len() == 3 => {
-                let stack = if tokens[1] != "constant" {
-                    StackType::Stack(*STR_STACK.get(tokens[1]).map_or_else(
-                        || Err(ParseError::UnknownSegmentError(tokens[1].to_owned())),
-                        Ok,
-                    )?)
-                } else {
-                    StackType::Constant
-                };
                 let location = str::parse::<HackMemSize>(tokens[2])?;
                 if tokens[0] == "push" {
-                    match stack {
-                        StackType::Stack(stack) => Ok(ParsedCmd::Push(stack, location)),
-                        StackType::Constant => Ok(ParsedCmd::Constant(location)),
-                    }
+                    let segment = *STR_PUSH_SEGMENT.get(tokens[1]).map_or_else(
+                        || Err(ParseError::UnknownSegmentError(tokens[1].to_owned())),
+                        Ok,
+                    )?;
+                    Ok(ParsedCmd::Push(segment, location))
+                } else if tokens[0] == "pop" {
+                    let segment = *STR_POP_SEGMENT.get(tokens[1]).map_or_else(
+                        || Err(ParseError::UnknownSegmentError(tokens[1].to_owned())),
+                        Ok,
+                    )?;
+                    Ok(ParsedCmd::Pop(segment, location))
                 } else {
-                    match stack {
-                        StackType::Stack(stack) => Ok(ParsedCmd::Pop(stack, location)),
-                        StackType::Constant => {
-                            Err(ParseError::UnknownSegmentError("constant".to_owned()))?
-                        }
-                    }
+                    Err(ParseError::UnknownCommandError(tokens.join(" ")))?
                 }
             }
             ref tokens => Err(ParseError::UnknownCommandError(tokens.join(" "))),
@@ -226,25 +268,25 @@ mod test {
 
     #[test]
     fn it_should_return_push_for_push_string() {
-        let stack_strings = vec![
+        let segment_strings = vec![
             "argument", "local", "static", "this", "that", "pointer", "temp",
         ];
-        let stacks = vec![
-            Stack::Argument,
-            Stack::Local,
-            Stack::Static,
-            Stack::This,
-            Stack::That,
-            Stack::Pointer,
-            Stack::Temp,
+        let segments = vec![
+            PushSegment::Argument,
+            PushSegment::Local,
+            PushSegment::Static,
+            PushSegment::This,
+            PushSegment::That,
+            PushSegment::Pointer,
+            PushSegment::Temp,
         ];
-        for (k, v) in stack_strings.into_iter().enumerate() {
+        for (k, v) in segment_strings.into_iter().enumerate() {
             let v = format!("push {} 3", v).to_string();
             let c = io::Cursor::new(v);
             let r = BufReader::new(c);
             let mut parser = Parser::new(r);
             let cmd = parser.next().transpose().unwrap().unwrap();
-            assert_eq!(cmd.parsed(), &ParsedCmd::Push(stacks[k], 3))
+            assert_eq!(cmd.parsed(), &ParsedCmd::Push(segments[k], 3))
         }
     }
 
@@ -255,30 +297,30 @@ mod test {
         let r = BufReader::new(c);
         let mut parser = Parser::new(r);
         let cmd = parser.next().transpose().unwrap().unwrap();
-        assert_eq!(cmd.parsed(), &ParsedCmd::Constant(3))
+        assert_eq!(cmd.parsed(), &ParsedCmd::Push(PushSegment::Constant, 3))
     }
 
     #[test]
     fn it_should_return_pop_for_pop_string() {
-        let stack_strings = vec![
+        let segment_strings = vec![
             "argument", "local", "static", "this", "that", "pointer", "temp",
         ];
-        let stacks = vec![
-            Stack::Argument,
-            Stack::Local,
-            Stack::Static,
-            Stack::This,
-            Stack::That,
-            Stack::Pointer,
-            Stack::Temp,
+        let segments = vec![
+            PopSegment::Argument,
+            PopSegment::Local,
+            PopSegment::Static,
+            PopSegment::This,
+            PopSegment::That,
+            PopSegment::Pointer,
+            PopSegment::Temp,
         ];
-        for (i, stack) in stack_strings.into_iter().enumerate() {
-            let v = format!("pop {} 3", stack).to_string();
+        for (i, segment) in segment_strings.into_iter().enumerate() {
+            let v = format!("pop {} 3", segment).to_string();
             let c = io::Cursor::new(v);
             let r = BufReader::new(c);
             let mut parser = Parser::new(r);
             let cmd = parser.next().transpose().unwrap().unwrap();
-            assert_eq!(cmd.parsed(), &ParsedCmd::Pop(stacks[i], 3))
+            assert_eq!(cmd.parsed(), &ParsedCmd::Pop(segments[i], 3))
         }
     }
 
@@ -297,8 +339,8 @@ mod test {
     }
 
     #[test]
-    fn it_should_return_error_when_unknown_stack_supplied() {
-        for segment in vec!["nostack", "constant"] {
+    fn it_should_return_error_when_unknown_segment_supplied() {
+        for segment in vec!["nosegment", "constant"] {
             let v = format!("pop {} 3", segment);
             let c = io::Cursor::new(v);
             let r = BufReader::new(c);
