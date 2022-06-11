@@ -1,7 +1,10 @@
 use crate::{code_writer::label_generator::LabelGenerator, parser::Arithmetic};
 
 use super::{
-    flatten, label,
+    flatten,
+    flow::{jmp, JmpCmd},
+    label,
+    register::{set_a_reg_to_pointer, set_alias, CmpVal},
     stack::{dec_stack_pointer, inc_stack_pointer, pop_and_prep_stack, push_d_reg_to_stack},
 };
 
@@ -43,30 +46,29 @@ fn bin_math_to_asm(symbol: char) -> Vec<String> {
 fn uni_math_to_asm(symbol: char) -> Vec<String> {
     flatten(vec![
         dec_stack_pointer(),
-        vec!["A=M".to_owned(), format!("M={}M", symbol)],
+        set_a_reg_to_pointer(),
+        vec![format!("M={}M", symbol)],
         inc_stack_pointer(),
     ])
 }
 
 fn cmp_math_to_asm(cmp: Cmp, label_generator: &mut LabelGenerator) -> Vec<String> {
-    let cmp_cmd = match cmp {
-        Cmp::Eq => "JEQ",
-        Cmp::Lt => "JLT",
-        Cmp::Gt => "JGT",
+    let jmp_cmd = match cmp {
+        Cmp::Eq => JmpCmd::Jeq,
+        Cmp::Lt => JmpCmd::Jlt,
+        Cmp::Gt => JmpCmd::Jgt,
     };
     let true_lbl = label_generator.generate();
     let false_lbl = label_generator.generate();
 
     flatten(vec![
         pop_and_prep_stack(),
-        vec![
-            "D=M-D".to_owned(),
-            format!("@{}", true_lbl),
-            format!("D;{}", cmp_cmd),
-            "D=0".to_owned(),
-            format!("@{}", false_lbl),
-            "0;JMP".to_owned(),
-        ],
+        vec!["D=M-D".to_owned()],
+        set_alias(&true_lbl),
+        jmp(jmp_cmd, CmpVal::D),
+        vec!["D=0".to_owned()],
+        set_alias(&false_lbl),
+        jmp(JmpCmd::Jmp, CmpVal::Zero),
         label(&true_lbl),
         vec!["D=-1".to_owned()],
         label(&false_lbl),

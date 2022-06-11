@@ -1,10 +1,12 @@
 mod arithmetic;
+mod flow;
 mod marker;
 mod memory;
 mod register;
 mod stack;
 
 pub(super) use arithmetic::arithmetic;
+pub(crate) use flow::flow;
 pub(super) use marker::label;
 pub(super) use marker::terminate;
 pub(crate) use memory::MemCmdWriter;

@@ -3,7 +3,7 @@ use std::{io::{self, Write}, rc::Rc, cell::RefCell};
 use crate::parser::{Command, ParsedCmd};
 
 use super::{
-    asm_generator::{arithmetic, terminate, MemoryError, MemCmdWriter},
+    asm_generator::{arithmetic, terminate, MemoryError, MemCmdWriter, label, flow},
     label_generator::LabelGenerator, reg_mgr::{RegMgr, RegMgrError},
 };
 
@@ -60,12 +60,7 @@ impl<'a, W: Write> CodeWriter<W> {
             ParsedCmd::Arithmetic(arr) => Ok(Some(arithmetic(arr, &mut self.label_generator))),
             ParsedCmd::Push(segment, idx) => Ok(Some(self.mem_cmd_writer.push_to_stack(segment, idx)?)),
             ParsedCmd::Pop(segment, idx) => Ok(Some(self.mem_cmd_writer.pop_stack_to(segment, idx)?)),
-            ParsedCmd::Label(_) => todo!(),
-            ParsedCmd::Goto(_) => todo!(),
-            ParsedCmd::If(_) => todo!(),
-            ParsedCmd::Function(_, _) => todo!(),
-            ParsedCmd::Call(_, _) => todo!(),
-            ParsedCmd::Return => todo!(),
+            ParsedCmd::Flow(flow_cmd) => Ok(Some(flow(flow_cmd))),
             ParsedCmd::Noop => Ok(None),
             ParsedCmd::Terminate => Ok(Some(terminate(&mut self.label_generator))),
         }
@@ -76,7 +71,7 @@ impl<'a, W: Write> CodeWriter<W> {
 mod test {
     use std::io::Cursor;
 
-    use crate::parser::{Arithmetic, PushSegment, PopSegment};
+    use crate::parser::{Arithmetic, PushSegment, PopSegment, Flow, Goto};
     use test_case::test_case;
 
     use super::*;
@@ -193,6 +188,16 @@ mod test {
         ParsedCmd::Arithmetic(Arithmetic::Eq),
         "//\n@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@ASM_1\nD;JEQ\nD=0\n@ASM_2\n0;JMP\n(ASM_1)\nD=-1\n(ASM_2)\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
         "eq"
+    )]
+    #[test_case(
+        ParsedCmd::Flow(Flow::Label("test".to_owned())),
+        "//\n(test)\n\0\0\0\0\0";
+        "label"
+    )]
+    #[test_case(
+        ParsedCmd::Flow(Flow::Goto(Goto::Conditional, "test".to_owned())),
+        "//\n@SP\nM=M-1\nA=M\nD=M\n@test\nD;JGT\nD;JLT\n";
+        "if-goto"
     )]
     #[test_case(
         ParsedCmd::Terminate, "//\n(ASM_1)\n@ASM_1\n0;JMP\n"; "terminate"

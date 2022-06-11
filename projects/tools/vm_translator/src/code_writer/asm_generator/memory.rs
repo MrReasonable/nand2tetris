@@ -50,11 +50,11 @@ pub(crate) struct MemCmdWriter {
 #[derive(thiserror::Error, Debug)]
 pub enum MemoryError {
     #[error("Temp error: {0}")]
-    TempError(#[from] RegMgrError),
+    Temp(#[from] RegMgrError),
     #[error("Memory out of bounds: {0} is out of bounds of segment {1}")]
-    OutOfBoundsPushError(u16, PushSegment),
+    OutOfBoundsPush(u16, PushSegment),
     #[error("Memory out of bounds: {0} is out of bounds of segment {1}")]
-    OutOfBoundsPopError(u16, PopSegment),
+    OutOfBoundsPop(u16, PopSegment),
 }
 
 impl MemCmdWriter {
@@ -78,7 +78,7 @@ impl MemCmdWriter {
                 )]),
                 PushSegment::Temp => {
                     if idx > AVAILABLE_TMP_BLOCKS - 1 {
-                        Err(MemoryError::OutOfBoundsPushError(idx, segment))?
+                        Err(MemoryError::OutOfBoundsPush(idx, segment))?
                     } else {
                         flatten(vec![
                             set_a_reg_to_constant(TMP_BASE_ADDR + idx),
@@ -88,7 +88,7 @@ impl MemCmdWriter {
                 }
                 PushSegment::Pointer => {
                     if idx > 1 {
-                        Err(MemoryError::OutOfBoundsPushError(idx, segment))?
+                        Err(MemoryError::OutOfBoundsPush(idx, segment))?
                     } else {
                         let segment = if idx == 0 {
                             PushSegment::This.into()
@@ -122,7 +122,7 @@ impl MemCmdWriter {
             ]),
             PopSegment::Temp => {
                 if idx > AVAILABLE_TMP_BLOCKS - 1 {
-                    Err(MemoryError::OutOfBoundsPopError(idx, segment))?
+                    Err(MemoryError::OutOfBoundsPop(idx, segment))?
                 } else {
                     flatten(vec![
                         pop_stack_to_d_reg(),
@@ -133,7 +133,7 @@ impl MemCmdWriter {
             }
             PopSegment::Pointer => {
                 if idx > 1 {
-                    Err(MemoryError::OutOfBoundsPopError(idx, segment))?
+                    Err(MemoryError::OutOfBoundsPop(idx, segment))?
                 } else {
                     let segment = if idx == 0 {
                         PushSegment::This.into()
@@ -159,7 +159,7 @@ impl MemCmdWriter {
 
     fn set_d_reg_to_segment_idx(&self, segment: &Segment, idx: u16) -> Vec<String> {
         let asm = flatten(vec![
-            set_d_reg_to_alias(get_segment_alias(&segment)),
+            set_d_reg_to_alias(get_segment_alias(segment)),
             if idx > 0 {
                 flatten(vec![set_a_reg_to_constant(idx), vec![format!("D=D+A")]])
             } else {

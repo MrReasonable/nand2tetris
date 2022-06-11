@@ -57,16 +57,23 @@ pub enum Arithmetic {
 }
 
 #[derive(PartialEq, Debug, Clone)]
+pub enum Flow {
+    Label(String),
+    Goto(Goto, String),
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum Goto {
+    Direct,
+    Conditional,
+}
+
+#[derive(PartialEq, Debug, Clone)]
 pub enum ParsedCmd {
     Arithmetic(Arithmetic),
     Push(PushSegment, HackMemSize),
     Pop(PopSegment, HackMemSize),
-    Label(String),
-    Goto(String),
-    If(String),
-    Function(String, HackMemSize),
-    Call(String, HackMemSize),
-    Return,
+    Flow(Flow),
     Terminate,
     Noop,
 }
@@ -166,39 +173,41 @@ impl TryFrom<&str> for ParsedCmd {
     type Error = ParseError;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let value = &value[..value.find("//").unwrap_or(value.len())];
-        match value.split_ascii_whitespace().collect::<Vec<&str>>() {
-            ref tokens if tokens.is_empty() => Ok(ParsedCmd::Noop),
-            ref tokens if tokens.len() == 1 => {
-                if tokens[0] == "return" {
-                    Ok(ParsedCmd::Return)
-                } else {
-                    Ok(ParsedCmd::Arithmetic(
-                        STR_ARITHMETIC.get(tokens[0]).map_or_else(
-                            || Err(ParseError::UnknownCommandError(tokens[0].to_owned())),
-                            |cmd| Ok(*cmd),
-                        )?,
-                    ))
-                }
-            }
-            ref tokens if tokens.len() == 3 => {
-                let location = str::parse::<HackMemSize>(tokens[2])?;
-                if tokens[0] == "push" {
-                    let segment = *STR_PUSH_SEGMENT.get(tokens[1]).map_or_else(
-                        || Err(ParseError::UnknownSegmentError(tokens[1].to_owned())),
+        match value
+            .split_ascii_whitespace()
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => Ok(ParsedCmd::Noop),
+            [arithmetic_cmd] => Ok(ParsedCmd::Arithmetic(
+                STR_ARITHMETIC.get(arithmetic_cmd).map_or_else(
+                    || Err(ParseError::UnknownCommandError(arithmetic_cmd.to_string())),
+                    |cmd| Ok(*cmd),
+                )?,
+            )),
+            ["label", label] => Ok(ParsedCmd::Flow(Flow::Label(label.to_string()))),
+            ["if-goto", label] => Ok(ParsedCmd::Flow(Flow::Goto(
+                Goto::Conditional,
+                label.to_string(),
+            ))),
+            ["goto", label] => Ok(ParsedCmd::Flow(Flow::Goto(Goto::Direct, label.to_string()))),
+            [op, segment, location] if *op == "push" || *op == "pop" => {
+                let location = str::parse::<HackMemSize>(*location)?;
+                if *op == "push" {
+                    let segment = *STR_PUSH_SEGMENT.get(segment).map_or_else(
+                        || Err(ParseError::UnknownSegmentError(segment.to_string())),
                         Ok,
                     )?;
                     Ok(ParsedCmd::Push(segment, location))
-                } else if tokens[0] == "pop" {
-                    let segment = *STR_POP_SEGMENT.get(tokens[1]).map_or_else(
-                        || Err(ParseError::UnknownSegmentError(tokens[1].to_owned())),
+                } else {
+                    let segment = *STR_POP_SEGMENT.get(segment).map_or_else(
+                        || Err(ParseError::UnknownSegmentError(segment.to_string())),
                         Ok,
                     )?;
                     Ok(ParsedCmd::Pop(segment, location))
-                } else {
-                    Err(ParseError::UnknownCommandError(tokens.join(" ")))?
                 }
             }
-            ref tokens => Err(ParseError::UnknownCommandError(tokens.join(" "))),
+            tokens => Err(ParseError::UnknownCommandError(tokens.join(" "))),
         }
     }
 }
@@ -233,6 +242,15 @@ impl<R: Read> Iterator for Parser<R> {
 mod test {
     use super::*;
     use assert_matches::assert_matches;
+    use test_case::test_case;
+
+    fn make_cmd(cmd: &str) -> Command {
+        let v = format!("{}", cmd).to_string();
+        let c = io::Cursor::new(v);
+        let r = BufReader::new(c);
+        let mut parser = Parser::new(r);
+        parser.next().transpose().unwrap().unwrap()
+    }
 
     #[test]
     fn it_should_return_none_when_no_more_commands_available() {
@@ -242,86 +260,161 @@ mod test {
         assert!(parser.next().is_none())
     }
 
-    #[test]
-    fn it_should_return_arithmetic_command_for_arithmetic_string() {
-        let arithmetic_strings = vec!["add", "sub", "neg", "eq", "gt", "lt", "and", "or", "not"];
-        let arithmetic_cmd = vec![
-            Arithmetic::Add,
-            Arithmetic::Sub,
-            Arithmetic::Neg,
-            Arithmetic::Eq,
-            Arithmetic::Gt,
-            Arithmetic::Lt,
-            Arithmetic::And,
-            Arithmetic::Or,
-            Arithmetic::Not,
-        ];
-        for (i, cmd) in arithmetic_strings.into_iter().enumerate() {
-            let v = format!("{}", cmd).to_string();
-            let c = io::Cursor::new(v);
-            let r = BufReader::new(c);
-            let mut parser = Parser::new(r);
-            let cmd = parser.next().transpose().unwrap().unwrap();
-            assert_eq!(cmd.parsed(), &ParsedCmd::Arithmetic(arithmetic_cmd[i]))
-        }
+    #[test_case(
+        "add",
+        Arithmetic::Add;
+        "add"
+    )]
+    #[test_case(
+        "sub",
+        Arithmetic::Sub;
+        "subtract"
+    )]
+    #[test_case(
+        "neg",
+        Arithmetic::Neg;
+        "negation"
+    )]
+    #[test_case(
+        "eq",
+        Arithmetic::Eq;
+        "equality"
+    )]
+    #[test_case(
+        "gt",
+        Arithmetic::Gt;
+        "greater than"
+    )]
+    #[test_case(
+        "lt",
+        Arithmetic::Lt;
+        "less than"
+    )]
+    #[test_case(
+        "and",
+        Arithmetic::And;
+        "and"
+    )]
+    #[test_case(
+        "or",
+        Arithmetic::Or;
+        "or"
+    )]
+    #[test_case(
+        "not",
+        Arithmetic::Not;
+        "not"
+    )]
+    fn it_should_return_arithmetic_command_for_arithmetic_string(
+        cmd_string: &str,
+        cmd: Arithmetic,
+    ) {
+        assert_eq!(make_cmd(cmd_string).parsed(), &ParsedCmd::Arithmetic(cmd))
     }
 
-    #[test]
-    fn it_should_return_push_for_push_string() {
-        let segment_strings = vec![
-            "argument", "local", "static", "this", "that", "pointer", "temp",
-        ];
-        let segments = vec![
-            PushSegment::Argument,
-            PushSegment::Local,
-            PushSegment::Static,
-            PushSegment::This,
-            PushSegment::That,
-            PushSegment::Pointer,
-            PushSegment::Temp,
-        ];
-        for (k, v) in segment_strings.into_iter().enumerate() {
-            let v = format!("push {} 3", v).to_string();
-            let c = io::Cursor::new(v);
-            let r = BufReader::new(c);
-            let mut parser = Parser::new(r);
-            let cmd = parser.next().transpose().unwrap().unwrap();
-            assert_eq!(cmd.parsed(), &ParsedCmd::Push(segments[k], 3))
-        }
+    #[test_case(
+        "label LOOP_START",
+        Flow::Label("LOOP_START".to_string());
+        "label"
+    )]
+    #[test_case(
+        "if-goto LOOP_START",
+        Flow::Goto(Goto::Conditional, "LOOP_START".to_string());
+        "if-goto"
+    )]
+    fn it_should_return_flow_command_for_flow_string(flow_string: &str, flow_cmd: Flow) {
+        assert_eq!(make_cmd(flow_string).parsed(), &ParsedCmd::Flow(flow_cmd));
     }
 
-    #[test]
-    fn it_should_return_constant_for_push_to_constant() {
-        let v = "push constant 3".to_string();
-        let c = io::Cursor::new(v);
-        let r = BufReader::new(c);
-        let mut parser = Parser::new(r);
-        let cmd = parser.next().transpose().unwrap().unwrap();
-        assert_eq!(cmd.parsed(), &ParsedCmd::Push(PushSegment::Constant, 3))
+    #[test_case(
+        "argument",
+        PushSegment::Argument;
+        "argument"
+    )]
+    #[test_case(
+        "local",
+        PushSegment::Local;
+        "local"
+    )]
+    #[test_case(
+        "static",
+        PushSegment::Static;
+        "static segment"
+    )]
+    #[test_case(
+        "this",
+        PushSegment::This;
+        "this"
+    )]
+    #[test_case(
+        "that",
+        PushSegment::That;
+        "that"
+    )]
+    #[test_case(
+        "pointer",
+        PushSegment::Pointer;
+        "pointer"
+    )]
+    #[test_case(
+        "temp",
+        PushSegment::Temp;
+        "temp"
+    )]
+    #[test_case(
+        "constant",
+        PushSegment::Constant;
+        "constant segment"
+    )]
+    fn it_should_return_push_for_push_string(segment_str: &str, segment_cmd: PushSegment) {
+        let v = format!("push {} 3", segment_str);
+        assert_eq!(
+            make_cmd(v.as_str()).parsed(),
+            &ParsedCmd::Push(segment_cmd, 3)
+        )
     }
 
-    #[test]
-    fn it_should_return_pop_for_pop_string() {
-        let segment_strings = vec![
-            "argument", "local", "static", "this", "that", "pointer", "temp",
-        ];
-        let segments = vec![
-            PopSegment::Argument,
-            PopSegment::Local,
-            PopSegment::Static,
-            PopSegment::This,
-            PopSegment::That,
-            PopSegment::Pointer,
-            PopSegment::Temp,
-        ];
-        for (i, segment) in segment_strings.into_iter().enumerate() {
-            let v = format!("pop {} 3", segment).to_string();
-            let c = io::Cursor::new(v);
-            let r = BufReader::new(c);
-            let mut parser = Parser::new(r);
-            let cmd = parser.next().transpose().unwrap().unwrap();
-            assert_eq!(cmd.parsed(), &ParsedCmd::Pop(segments[i], 3))
-        }
+    #[test_case(
+        "argument",
+        PopSegment::Argument;
+        "argument"
+    )]
+    #[test_case(
+        "local",
+        PopSegment::Local;
+        "local"
+    )]
+    #[test_case(
+        "static",
+        PopSegment::Static;
+        "static segment"
+    )]
+    #[test_case(
+        "this",
+        PopSegment::This;
+        "this"
+    )]
+    #[test_case(
+        "that",
+        PopSegment::That;
+        "that"
+    )]
+    #[test_case(
+        "pointer",
+        PopSegment::Pointer;
+        "pointer"
+    )]
+    #[test_case(
+        "temp",
+        PopSegment::Temp;
+        "temp"
+    )]
+    fn it_should_return_pop_for_pop_string(segment_str: &str, segment_cmd: PopSegment) {
+        let v = format!("pop {} 3", segment_str);
+        assert_eq!(
+            make_cmd(v.as_str()).parsed(),
+            &ParsedCmd::Pop(segment_cmd, 3)
+        )
     }
 
     #[test]
