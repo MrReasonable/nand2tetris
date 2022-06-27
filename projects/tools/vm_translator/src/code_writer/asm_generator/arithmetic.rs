@@ -1,4 +1,4 @@
-use crate::{code_writer::label_generator::LabelGenerator, parser::Arithmetic};
+use crate::{code_writer::label_manager::LabelManager, parser::Arithmetic};
 
 use super::{
     flatten,
@@ -21,7 +21,7 @@ const NOT_SYMBOL: char = '!';
 const AND_SYMBOL: char = '&';
 const OR_SYMBOL: char = '|';
 
-pub(crate) fn arithmetic(arr: Arithmetic, label_generator: &mut LabelGenerator) -> Vec<String> {
+pub(crate) fn arithmetic(arr: Arithmetic, label_manager: &mut LabelManager) -> Vec<String> {
     match arr {
         Arithmetic::Add => bin_math_to_asm(ADD_SYMBOL),
         Arithmetic::Sub => bin_math_to_asm(NEG_SYMBOL),
@@ -29,9 +29,9 @@ pub(crate) fn arithmetic(arr: Arithmetic, label_generator: &mut LabelGenerator) 
         Arithmetic::Or => bin_math_to_asm(OR_SYMBOL),
         Arithmetic::Neg => uni_math_to_asm(NEG_SYMBOL),
         Arithmetic::Not => uni_math_to_asm(NOT_SYMBOL),
-        Arithmetic::Eq => cmp_math_to_asm(Cmp::Eq, label_generator),
-        Arithmetic::Gt => cmp_math_to_asm(Cmp::Gt, label_generator),
-        Arithmetic::Lt => cmp_math_to_asm(Cmp::Lt, label_generator),
+        Arithmetic::Eq => cmp_math_to_asm(Cmp::Eq, label_manager),
+        Arithmetic::Gt => cmp_math_to_asm(Cmp::Gt, label_manager),
+        Arithmetic::Lt => cmp_math_to_asm(Cmp::Lt, label_manager),
     }
 }
 
@@ -52,14 +52,14 @@ fn uni_math_to_asm(symbol: char) -> Vec<String> {
     ])
 }
 
-fn cmp_math_to_asm(cmp: Cmp, label_generator: &mut LabelGenerator) -> Vec<String> {
+fn cmp_math_to_asm(cmp: Cmp, label_manager: &mut LabelManager) -> Vec<String> {
     let jmp_cmd = match cmp {
         Cmp::Eq => JmpCmd::Jeq,
         Cmp::Lt => JmpCmd::Jlt,
         Cmp::Gt => JmpCmd::Jgt,
     };
-    let true_lbl = label_generator.generate();
-    let false_lbl = label_generator.generate();
+    let true_lbl = label_manager.generate_static();
+    let false_lbl = label_manager.generate_static();
 
     flatten(vec![
         pop_and_prep_stack(),

@@ -7,8 +7,9 @@ mod stack;
 
 pub(super) use arithmetic::arithmetic;
 pub(crate) use flow::flow;
+pub(crate) use flow::FlowError;
 pub(super) use marker::label;
-pub(super) use marker::terminate;
+pub(super) use marker::marker;
 pub(crate) use memory::MemCmdWriter;
 pub(crate) use memory::MemoryError;
 

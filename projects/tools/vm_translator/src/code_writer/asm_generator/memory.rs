@@ -3,38 +3,27 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use lazy_static::lazy_static;
 
 use crate::{
-    code_writer::reg_mgr::{Reg, RegMgr, RegMgrError},
-    parser::{PopSegment, PushSegment, Segment},
+    code_writer::reg_mgr::{RegMgr, RegMgrError},
+    parser::Segment,
 };
 
 use super::{
     flatten,
     register::{
-        set_a_reg_to_alias, set_a_reg_to_constant, set_a_reg_to_d_reg, set_alias,
-        set_d_reg_to_alias, set_d_reg_to_constant, set_d_reg_to_mem, set_mem_to_d_reg,
+        set_a_reg_to_address, set_a_reg_to_alias, set_a_reg_to_constant, set_alias,
+        set_d_reg_to_alias, set_d_reg_to_constant, set_d_reg_to_mem, set_mem_at_alias_to_d_reg,
+        set_mem_to_d_reg,
     },
     stack::{pop_stack_to_d_reg, push_d_reg_to_stack},
 };
 
 lazy_static! {
-    static ref PUSH_MEM_MAP: HashMap<PushSegment, &'static str> = {
+    static ref SEGMENT_MEM_MAP: HashMap<Segment, &'static str> = {
         let mut m = HashMap::new();
-        m.insert(PushSegment::Local, "LCL");
-        m.insert(PushSegment::Argument, "ARG");
-        m.insert(PushSegment::This, "THIS");
-        m.insert(PushSegment::That, "THAT");
-        m.insert(PushSegment::Constant, "SP");
-        m
-    };
-}
-
-lazy_static! {
-    static ref POP_MEM_MAP: HashMap<PopSegment, &'static str> = {
-        let mut m = HashMap::new();
-        m.insert(PopSegment::Local, "LCL");
-        m.insert(PopSegment::Argument, "ARG");
-        m.insert(PopSegment::This, "THIS");
-        m.insert(PopSegment::That, "THAT");
+        m.insert(Segment::Local, "LCL");
+        m.insert(Segment::Argument, "ARG");
+        m.insert(Segment::This, "THIS");
+        m.insert(Segment::That, "THAT");
         m
     };
 }
@@ -52,9 +41,7 @@ pub enum MemoryError {
     #[error("Temp error: {0}")]
     Temp(#[from] RegMgrError),
     #[error("Memory out of bounds: {0} is out of bounds of segment {1}")]
-    OutOfBoundsPush(u16, PushSegment),
-    #[error("Memory out of bounds: {0} is out of bounds of segment {1}")]
-    OutOfBoundsPop(u16, PopSegment),
+    OutOfBounds(u16, Segment),
 }
 
 impl MemCmdWriter {
@@ -65,42 +52,41 @@ impl MemCmdWriter {
         }
     }
 
-    pub fn push_to_stack(
-        &self,
-        segment: PushSegment,
-        idx: u16,
-    ) -> Result<Vec<String>, MemoryError> {
+    pub fn push_constant(&self, value: i16) -> Vec<String> {
+        flatten(vec![set_d_reg_to_constant(value), push_d_reg_to_stack()])
+    }
+
+    pub fn push_to_stack(&self, segment: Segment, idx: u16) -> Result<Vec<String>, MemoryError> {
         Ok(flatten(vec![
             match segment {
-                PushSegment::Constant => set_d_reg_to_constant(idx),
-                PushSegment::Static => flatten(vec![set_d_reg_to_alias(
+                Segment::Static => flatten(vec![set_d_reg_to_alias(
                     format!("{}.{}", self.namespace, idx).as_str(),
+                    None,
                 )]),
-                PushSegment::Temp => {
+                Segment::Temp => {
                     if idx > AVAILABLE_TMP_BLOCKS - 1 {
-                        Err(MemoryError::OutOfBoundsPush(idx, segment))?
+                        Err(MemoryError::OutOfBounds(idx, segment))?
                     } else {
                         flatten(vec![
-                            set_a_reg_to_constant(TMP_BASE_ADDR + idx),
+                            set_a_reg_to_address(TMP_BASE_ADDR + idx),
                             set_d_reg_to_mem(),
                         ])
                     }
                 }
-                PushSegment::Pointer => {
+                Segment::Pointer => {
                     if idx > 1 {
-                        Err(MemoryError::OutOfBoundsPush(idx, segment))?
+                        Err(MemoryError::OutOfBounds(idx, segment))?
                     } else {
                         let segment = if idx == 0 {
-                            PushSegment::This.into()
+                            Segment::This
                         } else {
-                            PushSegment::That.into()
+                            Segment::That
                         };
-                        set_d_reg_to_alias(get_segment_alias(&segment))
+                        set_d_reg_to_alias(get_segment_alias(&segment), None)
                     }
                 }
                 segment => flatten(vec![
-                    self.set_d_reg_to_segment_idx(&segment.into(), idx),
-                    set_a_reg_to_d_reg(),
+                    set_a_reg_to_segment_idx(segment, idx),
                     set_d_reg_to_mem(),
                 ]),
             },
@@ -110,35 +96,35 @@ impl MemCmdWriter {
 
     pub(crate) fn pop_stack_to(
         &self,
-        segment: PopSegment,
+        segment: Segment,
         idx: u16,
     ) -> Result<Vec<String>, MemoryError> {
         let tmp = self.gen_purp_reg.borrow_mut().next()?;
         Ok(flatten(vec![match segment {
-            PopSegment::Static => flatten(vec![
+            Segment::Static => flatten(vec![
                 pop_stack_to_d_reg(),
                 set_alias(format!("{}.{}", self.namespace, idx).as_str()),
                 set_mem_to_d_reg(),
             ]),
-            PopSegment::Temp => {
+            Segment::Temp => {
                 if idx > AVAILABLE_TMP_BLOCKS - 1 {
-                    Err(MemoryError::OutOfBoundsPop(idx, segment))?
+                    Err(MemoryError::OutOfBounds(idx, segment))?
                 } else {
                     flatten(vec![
                         pop_stack_to_d_reg(),
-                        set_a_reg_to_constant(TMP_BASE_ADDR + idx),
+                        set_a_reg_to_constant((TMP_BASE_ADDR + idx) as i16),
                         set_mem_to_d_reg(),
                     ])
                 }
             }
-            PopSegment::Pointer => {
+            Segment::Pointer => {
                 if idx > 1 {
-                    Err(MemoryError::OutOfBoundsPop(idx, segment))?
+                    Err(MemoryError::OutOfBounds(idx, segment))?
                 } else {
                     let segment = if idx == 0 {
-                        PushSegment::This.into()
+                        Segment::This
                     } else {
-                        PushSegment::That.into()
+                        Segment::That
                     };
                     flatten(vec![
                         pop_stack_to_d_reg(),
@@ -148,40 +134,46 @@ impl MemCmdWriter {
                 }
             }
             segment => flatten(vec![
-                self.set_d_reg_to_segment_idx(&segment.into(), idx),
-                set_alias(format!("{}", tmp).as_str()),
+                set_d_reg_to_segment_idx(segment, idx),
+                set_alias(tmp.to_string().as_str()),
                 set_mem_to_d_reg(),
                 pop_stack_to_d_reg(),
-                self.copy_d_reg_to_mem(tmp),
+                set_mem_at_alias_to_d_reg(tmp.to_string().as_str()),
             ]),
         }]))
     }
+}
 
-    fn set_d_reg_to_segment_idx(&self, segment: &Segment, idx: u16) -> Vec<String> {
-        let asm = flatten(vec![
-            set_d_reg_to_alias(get_segment_alias(segment)),
-            if idx > 0 {
-                flatten(vec![set_a_reg_to_constant(idx), vec![format!("D=D+A")]])
-            } else {
-                vec![]
-            },
-        ]);
-        asm
-    }
+pub(super) fn set_d_reg_to_segment_idx(segment: Segment, idx: u16) -> Vec<String> {
+    let asm = flatten(vec![set_d_reg_to_alias(
+        get_segment_alias(&segment),
+        Some(idx as i16),
+    )]);
+    asm
+}
 
-    fn copy_d_reg_to_mem(&self, reg: Reg) -> Vec<String> {
+pub(super) fn set_a_reg_to_segment_idx(segment: Segment, idx: u16) -> Vec<String> {
+    let alias = get_segment_alias(&segment);
+    let asm = flatten(vec![if idx == 0 {
+        set_a_reg_to_alias(alias)
+    } else {
         flatten(vec![
-            set_a_reg_to_alias(format!("{}", reg).as_str()),
-            set_mem_to_d_reg(),
+            set_d_reg_to_alias(alias, None),
+            if idx == 1 {
+                vec![format!("A=D+1")]
+            } else {
+                flatten(vec![
+                    set_a_reg_to_constant(idx as i16),
+                    vec![format!("A=D+A")],
+                ])
+            },
         ])
-    }
+    }]);
+    asm
 }
 
 pub(super) fn get_segment_alias(segment: &Segment) -> &str {
-    match segment {
-        Segment::PushSegment(p) => *PUSH_MEM_MAP.get(p).unwrap(),
-        Segment::PopSegment(p) => *POP_MEM_MAP.get(p).unwrap(),
-    }
+    *SEGMENT_MEM_MAP.get(segment).unwrap()
 }
 
 #[cfg(test)]
@@ -197,31 +189,31 @@ mod test {
     }
 
     #[test_case(
-        PushSegment::Temp,
+        Segment::Temp,
         AVAILABLE_TMP_BLOCKS;
         "temp"
     )]
     #[test_case(
-        PushSegment::Pointer,
+        Segment::Pointer,
         2;
         "pointer"
     )]
-    fn it_should_raise_error_when_pushing_out_of_bounds_segment(segment: PushSegment, idx: u16) {
+    fn it_should_raise_error_when_pushing_out_of_bounds_segment(segment: Segment, idx: u16) {
         let cmd_writer = make_mem_cmd_writer();
         assert!(cmd_writer.push_to_stack(segment, idx).is_err());
     }
 
     #[test_case(
-        PopSegment::Temp,
+        Segment::Temp,
         AVAILABLE_TMP_BLOCKS;
         "temp"
     )]
     #[test_case(
-        PopSegment::Pointer,
+        Segment::Pointer,
         2;
         "pointer"
     )]
-    fn it_should_raise_error_when_popping_out_of_bounds_segment(segment: PopSegment, idx: u16) {
+    fn it_should_raise_error_when_popping_out_of_bounds_segment(segment: Segment, idx: u16) {
         let cmd_writer = make_mem_cmd_writer();
         assert!(cmd_writer.pop_stack_to(segment, idx).is_err());
     }

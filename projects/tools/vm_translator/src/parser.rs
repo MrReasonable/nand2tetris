@@ -58,8 +58,15 @@ pub enum Arithmetic {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Flow {
-    Label(String),
     Goto(Goto, String),
+    Call(String, u8),
+    Return,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum Marker {
+    Label(String),
+    Function(String, u8),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -71,33 +78,16 @@ pub enum Goto {
 #[derive(PartialEq, Debug, Clone)]
 pub enum ParsedCmd {
     Arithmetic(Arithmetic),
-    Push(PushSegment, HackMemSize),
-    Pop(PopSegment, HackMemSize),
+    Push(Segment, HackMemSize),
+    PushConstant(i16),
+    Pop(Segment, HackMemSize),
     Flow(Flow),
-    Terminate,
+    Marker(Marker),
     Noop,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy, Hash, Eq)]
 pub enum Segment {
-    PushSegment(PushSegment),
-    PopSegment(PopSegment),
-}
-
-#[derive(Debug, PartialEq, Clone, Copy, Hash, Eq)]
-pub enum PushSegment {
-    Argument,
-    Local,
-    Static,
-    This,
-    That,
-    Pointer,
-    Temp,
-    Constant,
-}
-
-#[derive(Debug, PartialEq, Clone, Copy, Hash, Eq)]
-pub enum PopSegment {
     Argument,
     Local,
     Static,
@@ -107,25 +97,7 @@ pub enum PopSegment {
     Temp,
 }
 
-impl From<PushSegment> for Segment {
-    fn from(p: PushSegment) -> Self {
-        Segment::PushSegment(p)
-    }
-}
-
-impl From<PopSegment> for Segment {
-    fn from(p: PopSegment) -> Self {
-        Segment::PopSegment(p)
-    }
-}
-
-impl Display for PushSegment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl Display for PopSegment {
+impl Display for Segment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
@@ -148,66 +120,57 @@ static STR_ARITHMETIC: phf::Map<&str, Arithmetic> = phf_map! {
     "not" =>  Arithmetic::Not,
 };
 
-static STR_PUSH_SEGMENT: phf::Map<&str, PushSegment> = phf_map! {
-    "argument" =>  PushSegment::Argument,
-    "local" =>  PushSegment::Local,
-    "static" =>  PushSegment::Static,
-    "this" =>  PushSegment::This,
-    "that" =>  PushSegment::That,
-    "pointer" =>  PushSegment::Pointer,
-    "temp" =>  PushSegment::Temp,
-    "constant" => PushSegment::Constant,
-};
-
-static STR_POP_SEGMENT: phf::Map<&str, PopSegment> = phf_map! {
-    "argument" =>  PopSegment::Argument,
-    "local" =>  PopSegment::Local,
-    "static" =>  PopSegment::Static,
-    "this" =>  PopSegment::This,
-    "that" =>  PopSegment::That,
-    "pointer" =>  PopSegment::Pointer,
-    "temp" =>  PopSegment::Temp
+static STR_SEGMENT: phf::Map<&str, Segment> = phf_map! {
+    "argument" =>  Segment::Argument,
+    "local" =>  Segment::Local,
+    "static" =>  Segment::Static,
+    "this" =>  Segment::This,
+    "that" =>  Segment::That,
+    "pointer" =>  Segment::Pointer,
+    "temp" =>  Segment::Temp,
 };
 
 impl TryFrom<&str> for ParsedCmd {
     type Error = ParseError;
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let value = &value[..value.find("//").unwrap_or(value.len())];
-        match value
-            .split_ascii_whitespace()
-            .collect::<Vec<_>>()
-            .as_slice()
-        {
+        match value.split_ascii_whitespace().collect::<Vec<_>>()[..] {
             [] => Ok(ParsedCmd::Noop),
+            ["return"] => Ok(ParsedCmd::Flow(Flow::Return)),
             [arithmetic_cmd] => Ok(ParsedCmd::Arithmetic(
                 STR_ARITHMETIC.get(arithmetic_cmd).map_or_else(
                     || Err(ParseError::UnknownCommandError(arithmetic_cmd.to_string())),
                     |cmd| Ok(*cmd),
                 )?,
             )),
-            ["label", label] => Ok(ParsedCmd::Flow(Flow::Label(label.to_string()))),
+            ["label", label] => Ok(ParsedCmd::Marker(Marker::Label(label.to_string()))),
             ["if-goto", label] => Ok(ParsedCmd::Flow(Flow::Goto(
                 Goto::Conditional,
                 label.to_string(),
             ))),
             ["goto", label] => Ok(ParsedCmd::Flow(Flow::Goto(Goto::Direct, label.to_string()))),
-            [op, segment, location] if *op == "push" || *op == "pop" => {
-                let location = str::parse::<HackMemSize>(*location)?;
-                if *op == "push" {
-                    let segment = *STR_PUSH_SEGMENT.get(segment).map_or_else(
-                        || Err(ParseError::UnknownSegmentError(segment.to_string())),
-                        Ok,
-                    )?;
+            ["function", name, local_count] => Ok(ParsedCmd::Marker(Marker::Function(
+                name.to_string(),
+                local_count.parse::<u8>()?,
+            ))),
+            ["call", name, arg_count] => Ok(ParsedCmd::Flow(Flow::Call(
+                name.to_string(),
+                arg_count.parse::<u8>()?,
+            ))),
+            ["push", "constant", value] => Ok(ParsedCmd::PushConstant(str::parse::<i16>(value)?)),
+            [op, segment, location] if op == "push" || op == "pop" => {
+                let location = str::parse::<HackMemSize>(location)?;
+                let segment = *STR_SEGMENT.get(segment).map_or_else(
+                    || Err(ParseError::UnknownSegmentError(segment.to_string())),
+                    Ok,
+                )?;
+                if op == "push" {
                     Ok(ParsedCmd::Push(segment, location))
                 } else {
-                    let segment = *STR_POP_SEGMENT.get(segment).map_or_else(
-                        || Err(ParseError::UnknownSegmentError(segment.to_string())),
-                        Ok,
-                    )?;
                     Ok(ParsedCmd::Pop(segment, location))
                 }
             }
-            tokens => Err(ParseError::UnknownCommandError(tokens.join(" "))),
+            ref tokens => Err(ParseError::UnknownCommandError(tokens.join(" "))),
         }
     }
 }
@@ -313,60 +276,77 @@ mod test {
     }
 
     #[test_case(
-        "label LOOP_START",
-        Flow::Label("LOOP_START".to_string());
-        "label"
-    )]
-    #[test_case(
         "if-goto LOOP_START",
         Flow::Goto(Goto::Conditional, "LOOP_START".to_string());
         "if-goto"
+    )]
+    #[test_case(
+        "goto LOOP_START",
+        Flow::Goto(Goto::Direct, "LOOP_START".to_string());
+        "goto"
+    )]
+    #[test_case(
+        "return",
+        Flow::Return;
+        "return_cmd"
     )]
     fn it_should_return_flow_command_for_flow_string(flow_string: &str, flow_cmd: Flow) {
         assert_eq!(make_cmd(flow_string).parsed(), &ParsedCmd::Flow(flow_cmd));
     }
 
     #[test_case(
+        "label LOOP_START",
+        Marker::Label("LOOP_START".to_string());
+        "label"
+    )]
+    #[test_case(
+        "function test 3",
+        Marker::Function("test".to_string(), 3_u8);
+        "function"
+    )]
+    fn it_should_return_marker_command_for_marker_string(marker_string: &str, marker_cmd: Marker) {
+        assert_eq!(
+            make_cmd(marker_string).parsed(),
+            &ParsedCmd::Marker(marker_cmd)
+        );
+    }
+
+    #[test_case(
         "argument",
-        PushSegment::Argument;
+        Segment::Argument;
         "argument"
     )]
     #[test_case(
         "local",
-        PushSegment::Local;
+        Segment::Local;
         "local"
     )]
     #[test_case(
         "static",
-        PushSegment::Static;
+        Segment::Static;
         "static segment"
     )]
     #[test_case(
         "this",
-        PushSegment::This;
+        Segment::This;
         "this"
     )]
     #[test_case(
         "that",
-        PushSegment::That;
+        Segment::That;
         "that"
     )]
     #[test_case(
         "pointer",
-        PushSegment::Pointer;
+        Segment::Pointer;
         "pointer"
     )]
     #[test_case(
         "temp",
-        PushSegment::Temp;
+        Segment::Temp;
         "temp"
     )]
-    #[test_case(
-        "constant",
-        PushSegment::Constant;
-        "constant segment"
-    )]
-    fn it_should_return_push_for_push_string(segment_str: &str, segment_cmd: PushSegment) {
+    fn it_should_return_push_for_push_string(segment_str: &str, segment_cmd: Segment) {
         let v = format!("push {} 3", segment_str);
         assert_eq!(
             make_cmd(v.as_str()).parsed(),
@@ -374,42 +354,50 @@ mod test {
         )
     }
 
+    #[test]
+    fn it_should_return_push_constant_for_push_constant_string() {
+        assert_eq!(
+            make_cmd("push constant 3").parsed(),
+            &ParsedCmd::PushConstant(3)
+        )
+    }
+
     #[test_case(
         "argument",
-        PopSegment::Argument;
+        Segment::Argument;
         "argument"
     )]
     #[test_case(
         "local",
-        PopSegment::Local;
+        Segment::Local;
         "local"
     )]
     #[test_case(
         "static",
-        PopSegment::Static;
+        Segment::Static;
         "static segment"
     )]
     #[test_case(
         "this",
-        PopSegment::This;
+        Segment::This;
         "this"
     )]
     #[test_case(
         "that",
-        PopSegment::That;
+        Segment::That;
         "that"
     )]
     #[test_case(
         "pointer",
-        PopSegment::Pointer;
+        Segment::Pointer;
         "pointer"
     )]
     #[test_case(
         "temp",
-        PopSegment::Temp;
+        Segment::Temp;
         "temp"
     )]
-    fn it_should_return_pop_for_pop_string(segment_str: &str, segment_cmd: PopSegment) {
+    fn it_should_return_pop_for_pop_string(segment_str: &str, segment_cmd: Segment) {
         let v = format!("pop {} 3", segment_str);
         assert_eq!(
             make_cmd(v.as_str()).parsed(),

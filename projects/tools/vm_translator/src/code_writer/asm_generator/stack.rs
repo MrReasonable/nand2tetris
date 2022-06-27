@@ -1,14 +1,13 @@
-use crate::parser::PushSegment;
-
 use super::{
     flatten,
-    memory::get_segment_alias,
     register::{set_a_reg_to_alias, set_a_reg_to_pointer, set_d_reg_to_mem},
 };
 
+pub(super) const SEGMENT_STACK: &str = "SP";
+
 pub(super) fn push_d_reg_to_stack() -> Vec<String> {
     flatten(vec![
-        set_a_reg_to_alias(get_segment_alias(&PushSegment::Constant.into())),
+        set_a_reg_to_alias(SEGMENT_STACK),
         vec!["M=D".to_owned()],
         inc_stack_pointer(),
     ])

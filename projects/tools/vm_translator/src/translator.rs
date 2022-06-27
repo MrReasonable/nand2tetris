@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     code_writer::{CodeWriter, CodeWriterError},
-    parser::{self, ParseError, ParsedCmd, Parser},
+    parser::{ParseError, Parser},
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -26,9 +26,10 @@ pub fn translate<W: Write>(
     code_writer: &mut CodeWriter<W>,
 ) -> Result<(), TranslatorError> {
     let path = Path::new(input_path);
+    code_writer.init()?;
 
     if path.is_dir() {
-        let mut entries = read_dir(path)?
+        let entries = read_dir(path)?
             .filter_map(|res| match res.map(|entry| entry.path()) {
                 Ok(path) => {
                     if let Some("vm") = path.extension().and_then(|p| p.to_str()) {
@@ -40,14 +41,12 @@ pub fn translate<W: Write>(
                 Err(e) => Some(Err(e)),
             })
             .collect::<Result<Vec<_>, io::Error>>()?;
-        entries.sort();
         for entry in entries {
             parse_file(&*entry, code_writer)?;
         }
     } else {
         parse_file(path, code_writer)?;
     }
-    code_writer.write(parser::Command::new("".to_owned(), ParsedCmd::Terminate))?;
     Ok(())
 }
 
@@ -57,6 +56,7 @@ pub fn create_code_writer(path: &Path) -> Result<CodeWriter<BufWriter<File>>, Tr
         .write(true)
         .create(true)
         .open(format!("{}.asm", name))?;
+    out_file.set_len(0)?;
     let out_buffer = BufWriter::new(out_file);
     Ok(CodeWriter::new(out_buffer)?)
 }

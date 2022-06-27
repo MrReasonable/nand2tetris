@@ -1,10 +1,10 @@
 use std::{io::{self, Write}, rc::Rc, cell::RefCell};
 
-use crate::parser::{Command, ParsedCmd};
+use crate::parser::{Command, ParsedCmd, Flow};
 
 use super::{
-    asm_generator::{arithmetic, terminate, MemoryError, MemCmdWriter, label, flow},
-    label_generator::LabelGenerator, reg_mgr::{RegMgr, RegMgrError},
+    asm_generator::{arithmetic, MemoryError, MemCmdWriter, flow, marker, FlowError},
+    reg_mgr::{RegMgr, RegMgrError}, label_manager::LabelManager,
 };
 
 #[derive(thiserror::Error, Debug)]
@@ -14,31 +14,39 @@ pub enum CodeWriterError {
     #[error("Temp register error: {0}")]
     Temp(#[from] RegMgrError),
     #[error("Memory manipulation asm error: {0}")]
-    Memory(#[from] MemoryError)
+    Memory(#[from] MemoryError),
+    #[error("Control flow error: {0}")]
+    Flow(#[from] FlowError)
 }
 
 pub struct CodeWriter<W: Write> {
     out_stream: W,
-    label_generator: LabelGenerator,
+    label_manager: LabelManager,
     gen_purp_reg: Rc<RefCell<RegMgr>>,
-    mem_cmd_writer: MemCmdWriter,
+    mem_cmd_writer: Rc<MemCmdWriter>,
 }
 
 impl<'a, W: Write> CodeWriter<W> {
     pub fn new(out_stream: W) -> Result<Self, CodeWriterError> {
         let gen_purp_reg = Rc::new(RefCell::new(RegMgr::new(13,15)?));
-        let mem_cmd_writer = MemCmdWriter::new("asm".to_owned(), gen_purp_reg.clone());
+        let mem_cmd_writer = Rc::new(MemCmdWriter::new("asm".to_owned(), gen_purp_reg.clone()));
+        let label_manager = LabelManager::new("asm");
         Ok(Self {
             out_stream,
-            label_generator: LabelGenerator::new("asm"),
+            label_manager,
             gen_purp_reg,
             mem_cmd_writer
         })
     }
 
+    pub fn init(&mut self) -> Result<(), CodeWriterError> {
+        writeln!(self.out_stream, "@256\nD=A\n@SP\nM=D")?;
+        self.write(Command::new("call Sys.init 0".to_string(), ParsedCmd::Flow(Flow::Call("Sys.init".to_string(), 0))))
+    }
+
     pub fn set_namespace(&mut self, namespace: &str) {
-        self.mem_cmd_writer = MemCmdWriter::new(namespace.to_owned(), self.gen_purp_reg.clone());
-        self.label_generator = LabelGenerator::new(namespace);
+        self.mem_cmd_writer = Rc::new(MemCmdWriter::new(namespace.to_owned(), self.gen_purp_reg.clone()));
+        self.label_manager.set_filename(namespace);
     }
 
     pub fn comment(&mut self, comment: &str) -> Result<(), CodeWriterError> {
@@ -57,12 +65,13 @@ impl<'a, W: Write> CodeWriter<W> {
 
     fn cmd_to_asm(&mut self, cmd: ParsedCmd) -> Result<Option<Vec<String>>, CodeWriterError> {
         match cmd {
-            ParsedCmd::Arithmetic(arr) => Ok(Some(arithmetic(arr, &mut self.label_generator))),
+            ParsedCmd::Arithmetic(arr) => Ok(Some(arithmetic(arr, &mut self.label_manager))),
+            ParsedCmd::PushConstant(value) => Ok(Some(self.mem_cmd_writer.push_constant(value))),
             ParsedCmd::Push(segment, idx) => Ok(Some(self.mem_cmd_writer.push_to_stack(segment, idx)?)),
             ParsedCmd::Pop(segment, idx) => Ok(Some(self.mem_cmd_writer.pop_stack_to(segment, idx)?)),
-            ParsedCmd::Flow(flow_cmd) => Ok(Some(flow(flow_cmd))),
+            ParsedCmd::Flow(flow_cmd) => Ok(Some(flow(self.gen_purp_reg.clone(), self.mem_cmd_writer.clone())(flow_cmd, &mut self.label_manager)?)),
+            ParsedCmd::Marker(marker_cmd) => Ok(Some(marker(marker_cmd, &mut self.label_manager))),
             ParsedCmd::Noop => Ok(None),
-            ParsedCmd::Terminate => Ok(Some(terminate(&mut self.label_generator))),
         }
     }
 }
@@ -71,7 +80,7 @@ impl<'a, W: Write> CodeWriter<W> {
 mod test {
     use std::io::Cursor;
 
-    use crate::parser::{Arithmetic, PushSegment, PopSegment, Flow, Goto};
+    use crate::parser::*;
     use test_case::test_case;
 
     use super::*;
@@ -90,62 +99,72 @@ mod test {
     }
 
     #[test_case(
-        ParsedCmd::Push(PushSegment::Constant, 5),
+        ParsedCmd::PushConstant(5),
         "//\n@5\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
         "push constant to stack"
     )]
     #[test_case(
-        ParsedCmd::Push(PushSegment::Argument, 0),
-        "//\n@ARG\nD=M\nA=D\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
+        ParsedCmd::Push(Segment::Argument, 0),
+        "//\n@ARG\nA=M\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
         "push first argument to stack"
     )]
     #[test_case(
-        ParsedCmd::Pop(PopSegment::Argument, 0), 
+        ParsedCmd::Pop(Segment::Argument, 0), 
         "//\n@ARG\nD=M\n@R13\nM=D\n@SP\nM=M-1\nA=M\nD=M\n@R13\nA=M\nM=D\n"; 
         "pop stack to first argument"
     )]
     #[test_case(
-        ParsedCmd::Push(PushSegment::Argument, 1),
-        "//\n@ARG\nD=M\n@1\nD=D+A\nA=D\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
+        ParsedCmd::Push(Segment::Argument, 1),
+        "//\n@ARG\nD=M\nA=D+1\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
         "push second argument to stack"
     )]
     #[test_case(
-        ParsedCmd::Pop(PopSegment::Argument, 1), 
-        "//\n@ARG\nD=M\n@1\nD=D+A\n@R13\nM=D\n@SP\nM=M-1\nA=M\nD=M\n@R13\nA=M\nM=D\n"; 
+        ParsedCmd::Pop(Segment::Argument, 1), 
+        "//\n@ARG\nD=M+1\n@R13\nM=D\n@SP\nM=M-1\nA=M\nD=M\n@R13\nA=M\nM=D\n"; 
         "pop stack to second argument"
     )]
     #[test_case(
-        ParsedCmd::Push(PushSegment::Static, 1),
+        ParsedCmd::Push(Segment::Argument, 2),
+        "//\n@ARG\nD=M\n@2\nA=D+A\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
+        "push third argument to stack"
+    )]
+    #[test_case(
+        ParsedCmd::Pop(Segment::Argument, 2), 
+        "//\n@ARG\nD=M\n@2\nD=D+A\n@R13\nM=D\n@SP\nM=M-1\nA=M\nD=M\n@R13\nA=M\nM=D\n"; 
+        "pop stack to third argument"
+    )]
+    #[test_case(
+        ParsedCmd::Push(Segment::Static, 1),
         "//\n@ASM.1\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n"; 
         "push first static to stack"
     )]
     #[test_case(
-        ParsedCmd::Pop(PopSegment::Static, 1),
+        ParsedCmd::Pop(Segment::Static, 1),
         "//\n@SP\nM=M-1\nA=M\nD=M\n@ASM.1\nM=D\n"; 
         "pop stack to first static"
     )]
     #[test_case(
-        ParsedCmd::Push(PushSegment::Static, 5),
+        ParsedCmd::Push(Segment::Static, 5),
         "//\n@ASM.5\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n"; 
         "push fifth static to stack"
     )]
     #[test_case(
-        ParsedCmd::Pop(PopSegment::Static, 5),
+        ParsedCmd::Pop(Segment::Static, 5),
         "//\n@SP\nM=M-1\nA=M\nD=M\n@ASM.5\nM=D\n"; 
         "pop stack to fifth static"
     )]
     #[test_case(
-        ParsedCmd::Push(PushSegment::Pointer, 0),
+        ParsedCmd::Push(Segment::Pointer, 0),
         "//\n@THIS\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n"; 
         "push pointer[0] to stack"
     )]
     #[test_case(
-        ParsedCmd::Pop(PopSegment::Pointer, 0),
+        ParsedCmd::Pop(Segment::Pointer, 0),
         "//\n@SP\nM=M-1\nA=M\nD=M\n@THIS\nM=D\n"; 
         "pop stack to pointer[0]"
     )]
     #[test_case(
-        ParsedCmd::Pop(PopSegment::Pointer, 1),
+        ParsedCmd::Pop(Segment::Pointer, 1),
         "//\n@SP\nM=M-1\nA=M\nD=M\n@THAT\nM=D\n"; 
         "pop stack to pointer[1]"
     )]
@@ -176,23 +195,18 @@ mod test {
     )]
     #[test_case(
         ParsedCmd::Arithmetic(Arithmetic::Lt),
-        "//\n@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@ASM_1\nD;JLT\nD=0\n@ASM_2\n0;JMP\n(ASM_1)\nD=-1\n(ASM_2)\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
+        "//\n@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@ASM.1\nD;JLT\nD=0\n@ASM.2\n0;JMP\n(ASM.1)\nD=-1\n(ASM.2)\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
         "lt"
     )]
     #[test_case(
         ParsedCmd::Arithmetic(Arithmetic::Gt),
-        "//\n@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@ASM_1\nD;JGT\nD=0\n@ASM_2\n0;JMP\n(ASM_1)\nD=-1\n(ASM_2)\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
+        "//\n@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@ASM.1\nD;JGT\nD=0\n@ASM.2\n0;JMP\n(ASM.1)\nD=-1\n(ASM.2)\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
         "gt"
     )]
     #[test_case(
         ParsedCmd::Arithmetic(Arithmetic::Eq),
-        "//\n@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@ASM_1\nD;JEQ\nD=0\n@ASM_2\n0;JMP\n(ASM_1)\nD=-1\n(ASM_2)\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
+        "//\n@SP\nM=M-1\nA=M\nD=M\n@SP\nM=M-1\nA=M\nD=M-D\n@ASM.1\nD;JEQ\nD=0\n@ASM.2\n0;JMP\n(ASM.1)\nD=-1\n(ASM.2)\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
         "eq"
-    )]
-    #[test_case(
-        ParsedCmd::Flow(Flow::Label("test".to_owned())),
-        "//\n(test)\n\0\0\0\0\0";
-        "label"
     )]
     #[test_case(
         ParsedCmd::Flow(Flow::Goto(Goto::Conditional, "test".to_owned())),
@@ -200,7 +214,29 @@ mod test {
         "if-goto"
     )]
     #[test_case(
-        ParsedCmd::Terminate, "//\n(ASM_1)\n@ASM_1\n0;JMP\n"; "terminate"
+        ParsedCmd::Flow(Flow::Goto(Goto::Direct, "test".to_owned())),
+        "//\n@test\n0;JMP\n";
+        "goto"
+    )]
+    #[test_case(
+        ParsedCmd::Flow(Flow::Return),
+        "//\n@LCL\nD=M\n@R13\nM=D\n@5\nA=D-A\nD=M\n@R14\nM=D\n@ARG\nD=M\n@R15\nM=D\n@SP\nM=M-1\nA=M\nD=M\n@R15\nA=M\nM=D\n@ARG\nD=M+1\n@SP\nM=D\n@R13\nA=M-1\nD=M\n@THAT\nM=D\n@R13\nD=M\n@2\nA=D-A\nD=M\n@THIS\nM=D\n@R13\nD=M\n@3\nA=D-A\nD=M\n@ARG\nM=D\n@R13\nD=M\n@4\nA=D-A\nD=M\n@LCL\nM=D\n@R14\nA=M\n0;JMP\n";
+        "return from function"
+    )]
+    #[test_case(
+        ParsedCmd::Flow(Flow::Call("Main.test".to_owned(), 0)),
+        "//\n@ASM.Main.test$ret.1\nD=A\n@SP\nA=M\nM=D\n@SP\nM=M+1\n@LCL\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n@ARG\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n@THIS\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n@THAT\nD=M\n@SP\nA=M\nM=D\n@SP\nM=M+1\n@SP\nD=M\n@5\nD=D-A\n@ARG\nM=D\n@SP\nD=M\n@LCL\nM=D\n@Main.test\n0;JMP\n(ASM.Main.test$ret.1)\n";
+        "call function with no arguments"
+    )]
+    #[test_case(
+        ParsedCmd::Marker(Marker::Label("test".to_owned())),
+        "//\n(test)\n\0\0\0\0\0";
+        "label"
+    )]
+    #[test_case(
+        ParsedCmd::Marker(Marker::Function("test".to_owned(), 4)),
+        "//\n(test)\nD=0\n@SP\nA=M\nM=D\n@SP\nM=M+1\nD=0\n@SP\nA=M\nM=D\n@SP\nM=M+1\nD=0\n@SP\nA=M\nM=D\n@SP\nM=M+1\nD=0\n@SP\nA=M\nM=D\n@SP\nM=M+1\n";
+        "declare function"
     )]
     fn test_asm_generation(cmd: ParsedCmd, expected_asm: &str) {
         let mut buff = make_buff();
